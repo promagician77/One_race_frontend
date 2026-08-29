@@ -1,0 +1,85 @@
+{
+  "_comment": "Neighborhood tiers. rank drives the shopping rule: you may buy from any neighborhood whose rank is <= your own. Window shopping above is view-only.",
+  "_version": "1.0",
+  "neighborhoods": [
+    {
+      "id": "HARBOUR",
+      "name": "Harbour District",
+      "rank": 0,
+      "moveInCost": 0,
+      "parkingSpaces": 1,
+      "premiumCars": false,
+      "colorCode": "#8B8B8B",
+      "blurb": "Where everyone starts. One car, one space, no excuses.",
+      "mapPosition": {
+        "x": 0.626,
+        "y": 0.746
+      }
+    },
+    {
+      "id": "NORTHRIDGE",
+      "name": "Northridge",
+      "rank": 1,
+      "moveInCost": 500,
+      "parkingSpaces": 3,
+      "premiumCars": false,
+      "colorCode": "#C9A227",
+      "blurb": "Room for three. The first real step up.",
+      "mapPosition": {
+        "x": 0.317,
+        "y": 0.23
+      }
+    },
+    {
+      "id": "EASTPOINT",
+      "name": "Eastpoint",
+      "rank": 2,
+      "moveInCost": 15000,
+      "parkingSpaces": 7,
+      "premiumCars": true,
+      "colorCode": "#3F8F5C",
+      "blurb": "Premium metal shows up here. Seven spaces to fill.",
+      "mapPosition": {
+        "x": 0.766,
+        "y": 0.354
+      }
+    },
+    {
+      "id": "WESTBAY",
+      "name": "Westbay",
+      "rank": 3,
+      "moveInCost": 50000,
+      "parkingSpaces": 15,
+      "premiumCars": true,
+      "colorCode": "#4A6FA5",
+      "blurb": "Fifteen spaces and access to every shop in the city.",
+      "mapPosition": {
+        "x": 0.224,
+        "y": 0.509
+      }
+    },
+    {
+      "id": "DOWNTOWN",
+      "name": "Downtown",
+      "rank": 4,
+      "moveInCost": 500000,
+      "parkingSpaces": 100,
+      "premiumCars": true,
+      "colorCode": "#B8A6D9",
+      "blurb": "The top. A hundred spaces and nothing left to prove.",
+      "mapPosition": {
+        "x": 0.527,
+        "y": 0.395
+      }
+    }
+  ],
+  "impound": {
+    "_comment": "If a player can no longer afford their neighborhood, cars above the new parking limit are impounded until they pay the fee or move back up.",
+    "feePerCar": 250,
+    "mapPosition": {
+      "x": 0.335,
+      "y": 0.082
+    }
+  },
+  "startingCash": 3500
+}

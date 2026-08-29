@@ -1,0 +1,4 @@
+res://scenes/core/Main.tscn
+res://scripts/ui/UIKit.gd
+res://scripts/ui/SignupScreen.gd
+res://scripts/ui/ArtScreen.gd

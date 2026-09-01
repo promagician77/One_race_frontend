@@ -248,7 +248,7 @@ func _run() -> void:
 	_check("mismatched confirmation never reaches the server",
 		not Api.is_signed_in())
 	_check("and the screen says why",
-		signup.status_label.text.contains("match"), signup.status_label.text)
+		signup.notice_label.text.contains("match"), signup.notice_label.text)
 
 	signup.queue_free()
 	await get_tree().process_frame
@@ -269,14 +269,14 @@ func _run() -> void:
 	screen._pass_field.text = "wrong-password"
 	await screen._on_submit()
 	_check("wrong password is refused", not Api.is_signed_in())
-	_check("and the screen explains why", screen.status_label.text.length() > 0,
-		screen.status_label.text)
+	_check("and the screen explains why", screen.notice_label.text.length() > 0,
+		screen.notice_label.text)
 
 	screen._name_field.text = ""
 	screen._pass_field.text = ""
 	await screen._on_submit()
 	_check("empty fields are caught before any request",
-		screen.status_label.text.contains("racer name"), screen.status_label.text)
+		screen.notice_label.text.contains("racer name"), screen.notice_label.text)
 
 	screen._on_create_account()
 	await get_tree().process_frame

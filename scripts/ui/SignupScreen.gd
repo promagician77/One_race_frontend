@@ -1,16 +1,18 @@
 extends ArtScreen
 
 # Painted element positions, measured off signup.png ──────────────
-const R_NAME_TEXT    := Rect2(212, 387, 428, 33)
-const R_EMAIL_TEXT   := Rect2(212, 472, 428, 33)
-const R_PASS_TEXT    := Rect2(212, 556, 380, 33)
+# The field rects are the interiors of the painted boxes, from just past the
+# icon divider to the border (to the eye, where there is one).
+const R_NAME_TEXT    := Rect2(205, 382, 434, 42)
+const R_EMAIL_TEXT   := Rect2(205, 467, 434, 41)
+const R_PASS_TEXT    := Rect2(205, 551, 385, 42)
 const R_PASS_EYE     := Rect2(596, 556, 46, 33)
-const R_CONFIRM_TEXT := Rect2(212, 640, 380, 33)
+const R_CONFIRM_TEXT := Rect2(205, 634, 385, 42)
 const R_CONFIRM_EYE  := Rect2(596, 640, 46, 33)
 const R_CREATE       := Rect2(155, 705, 490, 45)
-const R_STATUS       := Rect2(95, 780, 595, 80)
-const R_SETTINGS     := Rect2(1281, 764, 115, 114)
-const R_EXIT         := Rect2(1438, 764, 115, 114)
+# Both are painted hexagons; the rects are their full extents, points included.
+const R_SETTINGS     := Rect2(1262, 764, 140, 118)
+const R_EXIT         := Rect2(1427, 764, 138, 118)
 
 ## Matches the server: 3-20 characters, letters, numbers and underscore.
 const NAME_MIN := 3
@@ -32,23 +34,23 @@ func _ready() -> void:
 	build_art()
 	_build_fields()
 	_build_buttons()
-	build_status(R_STATUS)
+	build_notice()
 
 	_name_field.grab_focus()
 
 
 func _build_fields() -> void:
-	_name_field = make_field(false)
-	place(_name_field, R_NAME_TEXT, "R_NAME_TEXT")
+	_name_field = make_field("Enter your racer name", false)
+	place_field(_name_field, R_NAME_TEXT, "R_NAME_TEXT")
 
-	_email_field = make_field(false)
-	place(_email_field, R_EMAIL_TEXT, "R_EMAIL_TEXT")
+	_email_field = make_field("Enter your email", false)
+	place_field(_email_field, R_EMAIL_TEXT, "R_EMAIL_TEXT")
 
-	_pass_field = make_field(true)
-	place(_pass_field, R_PASS_TEXT, "R_PASS_TEXT")
+	_pass_field = make_field("Enter your password", true)
+	place_field(_pass_field, R_PASS_TEXT, "R_PASS_TEXT")
 
-	_confirm_field = make_field(true)
-	place(_confirm_field, R_CONFIRM_TEXT, "R_CONFIRM_TEXT")
+	_confirm_field = make_field("Confirm your password", true)
+	place_field(_confirm_field, R_CONFIRM_TEXT, "R_CONFIRM_TEXT")
 
 	for f in [_name_field, _email_field, _pass_field, _confirm_field]:
 		f.text_submitted.connect(_on_field_submit)
@@ -67,13 +69,13 @@ func _build_buttons() -> void:
 	_hit_create.pressed.connect(_on_submit)
 	place(_hit_create, R_CREATE, "R_CREATE")
 
-	var settings := make_hit("Settings arrive with the options screen")
+	# Painted hexagons, so these light themselves instead of taking a wash.
+	var settings := place_icon_hit(R_SETTINGS,
+		"Settings arrive with the options screen", "R_SETTINGS")
 	settings.pressed.connect(_on_settings)
-	place(settings, R_SETTINGS, "R_SETTINGS")
 
-	var quit := make_hit("Quit the game")
+	var quit := place_icon_hit(R_EXIT, "Quit the game", "R_EXIT")
 	quit.pressed.connect(_on_quit)
-	place(quit, R_EXIT, "R_EXIT")
 
 
 # ─────────────────────────────────────────────────────────────

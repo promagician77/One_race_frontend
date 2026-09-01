@@ -111,40 +111,41 @@ func _build_hotspots() -> void:
 	for loc in LOCATIONS:
 		var spot := _make_hotspot(loc)
 		_map_area.add_child(spot)
-		_hotspots.append({ "node": spot, "data": loc })
+		_hotspots.append({ "node": spot, "data": loc, "mark": spot.get_node("Mark") })
 	_refresh_hotspots()
 
 
 ## A transparent hit area over a painted pin. The artwork draws the icon and
-## the caption; this only has to catch the click and carry the tooltip.
+## the caption; this catches the click, carries the tooltip, and hangs the
+## reticle that marks it.
+##
+## `flat` is off deliberately. A flat Button skips its state styleboxes
+## entirely, which is why the scrim over a locked pin never used to appear.
 func _make_hotspot(loc: Dictionary) -> Control:
 	var btn := Button.new()
 	btn.custom_minimum_size = HOTSPOT_SIZE
 	btn.tooltip_text = _tooltip_for(loc)
 	btn.focus_mode = Control.FOCUS_ALL
-	btn.flat = true
 	btn.name = "Dot"
 	btn.pressed.connect(_on_hotspot_pressed.bind(loc))
 
+	# Nothing is drawn on the button itself but the locked scrim, set by
+	# _refresh_hotspots. Every other state is the reticle's job.
 	var clear := StyleBoxFlat.new()
 	clear.bg_color = Color(1, 1, 1, 0)
 	clear.set_corner_radius_all(999)
-
-	var hover: StyleBoxFlat = clear.duplicate()
-	hover.bg_color = Color(1, 1, 1, 0.14)
-
-	var pressed: StyleBoxFlat = clear.duplicate()
-	pressed.bg_color = Color(0, 0, 0, 0.22)
-
-	var focus: StyleBoxFlat = clear.duplicate()
-	focus.border_color = Design.AMBER
-	focus.set_border_width_all(2)
-
-	btn.add_theme_stylebox_override("normal", clear)
-	btn.add_theme_stylebox_override("hover", hover)
-	btn.add_theme_stylebox_override("pressed", pressed)
+	btn.add_theme_stylebox_override("focus", clear)
 	btn.add_theme_stylebox_override("disabled", clear)
-	btn.add_theme_stylebox_override("focus", focus)
+
+	var mark := PinReticle.new()
+	mark.name = "Mark"
+	mark.set_anchors_preset(Control.PRESET_FULL_RECT)
+	btn.add_child(mark)
+
+	btn.mouse_entered.connect(mark.set_hovered.bind(true))
+	btn.mouse_exited.connect(mark.set_hovered.bind(false))
+	btn.focus_entered.connect(mark.set_focused.bind(true))
+	btn.focus_exited.connect(mark.set_focused.bind(false))
 
 	if DEBUG_PINS:
 		var outline := ReferenceRect.new()
@@ -174,11 +175,17 @@ func _refresh_hotspots() -> void:
 		)
 
 		# The pin is painted, so a locked one cannot be recoloured -- it gets
-		# a dark scrim over it instead, which reads the same way.
+		# a dark scrim over it instead, which reads the same way. Every state
+		# carries it, or the scrim would blink off under the cursor.
 		var accessible := _is_accessible(loc)
-		node.add_theme_stylebox_override("normal", _pin_box(accessible, false))
-		node.add_theme_stylebox_override("hover", _pin_box(accessible, true))
+		for state in ["normal", "hover", "pressed", "hover_pressed"]:
+			node.add_theme_stylebox_override(state, _pin_box(accessible))
 		node.tooltip_text = _tooltip_for(loc)
+
+		# A gated pin locks on in warning colour: the mark says which pin the
+		# player picked, and the colour says they cannot walk into it yet.
+		var mark: PinReticle = h.mark
+		mark.tint = Design.AMBER_HOT if accessible else Design.WARN
 
 	_update_footer()
 
@@ -186,7 +193,7 @@ func _refresh_hotspots() -> void:
 ## Locked pins are dimmed because the artwork owns the pin and cannot be
 ## recoloured. Reachable ones draw nothing at all -- the reticle is the
 ## feedback, not a disc behind the icon.
-func _pin_box(accessible: bool, _hover: bool) -> StyleBoxFlat:
+func _pin_box(accessible: bool) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
 	sb.set_corner_radius_all(999)
 	sb.bg_color = Color(0.02, 0.03, 0.04, 0.62) if not accessible else Color(1, 1, 1, 0)
@@ -246,6 +253,8 @@ func _tooltip_for(loc: Dictionary) -> String:
 
 func _on_hotspot_pressed(loc: Dictionary) -> void:
 	_selected = loc
+	for h in _hotspots:
+		h.mark.set_selected(h.data.id == loc.id)
 
 	# Locations with artwork of their own get the panel; the rest use the card.
 	if _modal != null and LocationModal.handles(str(loc.get("kind", ""))):

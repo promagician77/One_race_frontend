@@ -17,26 +17,39 @@ signal closed()
 ## `r_*` masks cover the painted value and are padded; `t_*` is where the
 ## replacement type sits, on the artwork's own baseline. `crop` is the panel
 ## within its canvas -- both PNGs are opaque black outside it.
+##
+## `r_location` is cut to the painted name and nothing more. It used to span
+## the whole row, which reached past the dark plate the name sits on and
+## flattened the lit skyline beside it into a black bar. The name's own ink
+## was found by hue, so the mask covers it and leaves the art alone. Race
+## track and home keep their full-row mask: their name shares a hue with the
+## art right next to it, so there is no safe line to cut on.
 const KINDS := {
 	"DEALERSHIP": {
 		"art": "res://assets/ui/dealership.png",
 		"crop": Rect2(66, 52, 893, 1391),
-		"r_location": Rect2(204, 462, 302, 66), "t_location": Rect2(210, 469, 290, 52),
-		"r_count":    Rect2(238, 684, 64, 52),  "t_count":    Rect2(245, 690, 60, 40),
-		"r_price":    Rect2(506, 681, 196, 56), "t_price":    Rect2(512, 688, 184, 42),
-		"r_refresh":  Rect2(752, 681, 178, 56), "t_refresh":  Rect2(760, 688, 170, 42),
+		"r_location": Rect2(204, 469, 196, 43), "t_location": Rect2(210, 464, 296, 52),
+		"r_count":    Rect2(239, 685, 59, 49),  "t_count":    Rect2(245, 677, 118, 52),
+		"r_price":    Rect2(456, 684, 160, 49), "t_price":    Rect2(462, 681, 180, 50),
+		"r_refresh":  Rect2(738, 688, 114, 42), "t_refresh":  Rect2(744, 679, 165, 46),
+		"s_count": 51, "s_price": 38, "s_refresh": 41,
 		"r_close":  Rect2(816, 104, 88, 80),
 		"r_enter":  Rect2(140, 1102, 744, 100),
 		"r_travel": Rect2(140, 1244, 744, 92),
+		"preview": [
+			Rect2(146, 886, 152, 133), Rect2(322, 886, 153, 133),
+			Rect2(499, 886, 151, 133), Rect2(674, 886, 152, 133),
+		],
+		"r_next": Rect2(840, 916, 48, 74),
 		"ink": Color("#31CDF7"),
 		"fill_location": Color("#05080C"),
-		"fill_stat": Color("#05090B"),
+		"fill_stat": Color("#030608"),
 		"middle": "band",
 	},
 	"PARTS_SHOP": {
 		"art": "res://assets/ui/partshop.png",
 		"crop": Rect2(62, 50, 903, 1445),
-		"r_location": Rect2(206, 464, 320, 74), "t_location": Rect2(213, 472, 306, 58),
+		"r_location": Rect2(206, 479, 236, 44), "t_location": Rect2(213, 472, 306, 58),
 		"r_count":    Rect2(236, 708, 70, 56),  "t_count":    Rect2(244, 714, 64, 44),
 		"r_price":    Rect2(500, 702, 208, 60), "t_price":    Rect2(507, 708, 196, 48),
 		"r_refresh":  Rect2(740, 698, 190, 66), "t_refresh":  Rect2(748, 706, 178, 48),
@@ -51,7 +64,7 @@ const KINDS := {
 	"IMPOUND": {
 		"art": "res://assets/ui/impound.png",
 		"crop": Rect2(76, 46, 937, 1371),
-		"r_location": Rect2(222, 458, 328, 74), "t_location": Rect2(230, 466, 314, 58),
+		"r_location": Rect2(223, 473, 211, 45), "t_location": Rect2(230, 466, 314, 58),
 		"r_count":    Rect2(258, 698, 92, 54),  "t_count":    Rect2(266, 704, 82, 42),
 		"r_price":    Rect2(502, 686, 202, 66), "t_price":    Rect2(510, 694, 192, 50),
 		"r_refresh":  Rect2(792, 688, 196, 66), "t_refresh":  Rect2(800, 696, 186, 50),
@@ -111,9 +124,44 @@ const CORNER_REACH := 0.18
 const INK_WHITE := Color("#E8ECF0")
 const INK_AMBER := Color("#F0A020")
 
+## Type sizes for the redrawn values, in the artwork's own pixels.
+##
+## The location is set in the monospace face, not the display one. The name
+## painted into the art is a squared fixed-width type -- its I carries
+## crossbars, and C, E and D all take the same advance -- which the condensed
+## display face cannot imitate at any size. Mono carries a 0.73em cap, so 42
+## puts the redrawn name on the artwork's own 31px cap and, on four of the
+## five panels, within a pixel of its baseline.
+const LOCATION_SIZE := 42
+const STAT_SIZE := 40
+
+## The dealership's stats were measured the same way and override the default:
+## the artwork sets its car count at a 37px cap, the price band and the refresh
+## clock at 31 and 30. `s_*` on a kind carries that; the rest fall back.
+
+## Where a value stops shrinking to fit its plate.
+const VALUE_MIN_SIZE := 24
+
+## Car photographs, dropped in as numbered cutouts on transparent ground.
+const CAR_SHOT_DIR := "res://assets/ui/cars/"
+
+## How many of them are there. Counted once, on first use, so another photo
+## dropped in beside them needs no code change.
+static var _shots := -1
+
 ## How far off-screen it starts, as a fraction of its own width.
 const SLIDE_FROM := 1.06
 const SLIDE_TIME := 0.28
+
+## The preview strip's page turn. Photos leave to the left and the next ones
+## arrive from the right, each box a beat behind the one before it, so the
+## strip reads as one moving row rather than four boxes blinking at once.
+const SHOT_OUT := 0.10
+const SHOT_IN := 0.16
+const SHOT_STAGGER := 0.035
+
+## How far a photo travels on its way out, as a fraction of its own box.
+const SHOT_TRAVEL := 0.35
 
 var frame: Control
 
@@ -124,6 +172,14 @@ var _count_label: Label = null
 var _price_label: RichTextLabel = null
 var _refresh_label: Label = null
 var _scaled: Array = []
+var _previews: Array = []
+var _shot_ring: Array = []
+var _shot_page := 0
+var _shot_tween: Tween = null
+var _location_scale: Dictionary = {}
+var _count_scale: Dictionary = {}
+var _price_scale: Dictionary = {}
+var _refresh_scale: Dictionary = {}
 var _tween: Tween = null
 var _loc: Dictionary = {}
 
@@ -141,6 +197,9 @@ func _exit_tree() -> void:
 	if _tween != null and _tween.is_valid():
 		_tween.kill()
 	_tween = null
+	if _shot_tween != null and _shot_tween.is_valid():
+		_shot_tween.kill()
+	_shot_tween = null
 
 
 ## Does this location have artwork of its own?
@@ -158,6 +217,7 @@ func _build(kind: String) -> void:
 	if _fitter != null:
 		_fitter.queue_free()
 	_scaled.clear()
+	_previews.clear()
 
 	_cfg = KINDS[kind]
 	var crop: Rect2 = _cfg["crop"]
@@ -173,6 +233,11 @@ func _build(kind: String) -> void:
 
 	frame = Control.new()
 	frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# The fitter has not sorted its children yet, so the frame is still zero
+	# sized while this runs. Type is sized off the frame, so it has to be
+	# redone the moment the frame gets its real size -- otherwise every value
+	# on the panel stays at the floor of the scale and reads as a caption.
+	frame.resized.connect(_on_frame_resized)
 	_fitter.add_child(frame)
 
 	var art_path: String = _cfg["art"]
@@ -195,10 +260,22 @@ func _build(kind: String) -> void:
 
 	var ink: Color = _cfg["ink"]
 	_location_label = _value(_cfg["r_location"], _cfg["t_location"],
-		_cfg["fill_location"], ink, 52)
-	_count_label = _value(_cfg["r_count"], _cfg["t_count"], _cfg["fill_stat"], ink, 40)
-	_price_label = _rich_value(_cfg["r_price"], _cfg["t_price"], _cfg["fill_stat"], 40)
-	_refresh_label = _value(_cfg["r_refresh"], _cfg["t_refresh"], _cfg["fill_stat"], ink, 40)
+		_cfg["fill_location"], ink, _size("s_location", LOCATION_SIZE))
+	_location_scale = _scaled[_scaled.size() - 1]
+	_count_label = _value(_cfg["r_count"], _cfg["t_count"], _cfg["fill_stat"], ink,
+		_size("s_count", STAT_SIZE))
+	_count_scale = _scaled[_scaled.size() - 1]
+	_price_label = _rich_value(_cfg["r_price"], _cfg["t_price"], _cfg["fill_stat"],
+		_size("s_price", STAT_SIZE))
+	_price_scale = _scaled[_scaled.size() - 1]
+	_refresh_label = _value(_cfg["r_refresh"], _cfg["t_refresh"], _cfg["fill_stat"], ink,
+		_size("s_refresh", STAT_SIZE))
+	_refresh_scale = _scaled[_scaled.size() - 1]
+
+	for slot in _cfg.get("preview", []):
+		_previews.append(_shot_slot(slot))
+	if _cfg.has("r_next"):
+		_hit(_cfg["r_next"], "Next car", _on_next_shot)
 
 	_hit(_cfg["r_close"], "Close", _on_close)
 	_hit(_cfg["r_enter"], "Enter this location", _on_enter)
@@ -251,15 +328,21 @@ func _value(mask_rect: Rect2, type_rect: Rect2, fill: Color,
 	label.clip_text = true
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	label.add_theme_color_override("font_color", color)
-	Design.apply_display(label)
+	Design.apply_mono(label)
 	_place(label, type_rect)
 
-	_scaled.append({"node": label, "size": size, "rich": false})
+	_scaled.append({"node": label, "size": size, "rich": false, "font": Design.font_mono})
 	return label
 
 
 ## The price band is two colours in the artwork -- white for the floor, amber
 ## for the ceiling -- so it needs markup rather than a single font colour.
+##
+## It is also the one value the artwork does not set in the squared face. Its
+## dollar signs are narrow and tall -- 17 by 37 pixels, a 0.46 ratio -- which
+## is the display face's $ (16 by 37) and not the mono one's (19 by 43). Set
+## in mono the widest band runs 280px into a 180px plate and has to shrink
+## away to nothing; in the display face it measures 180 and never shrinks.
 func _rich_value(mask_rect: Rect2, type_rect: Rect2, fill: Color, size: int) -> RichTextLabel:
 	_mask(mask_rect, fill)
 
@@ -272,8 +355,22 @@ func _rich_value(mask_rect: Rect2, type_rect: Rect2, fill: Color, size: int) -> 
 		rtl.add_theme_font_override("normal_font", Design.font_display)
 	_place(rtl, type_rect)
 
-	_scaled.append({"node": rtl, "size": size, "rich": true})
+	_scaled.append({"node": rtl, "size": size, "rich": true, "font": Design.font_display})
 	return rtl
+
+
+## One of the artwork's empty inventory boxes, waiting for a car. The photo is
+## fitted whole rather than filled, because the cutouts are shot at their own
+## proportions -- anywhere from 1.41 to 2.34 wide -- and cropping to a common
+## box would cut the nose off the long ones.
+func _shot_slot(slot: Rect2) -> TextureRect:
+	var shot := TextureRect.new()
+	shot.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	shot.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	shot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	shot.visible = false
+	_place(shot, slot)
+	return shot
 
 
 func _mask(r: Rect2, fill: Color) -> void:
@@ -324,7 +421,7 @@ func _place(node: Control, r: Rect2) -> void:
 
 
 func _rescale_type() -> void:
-	if frame == null or _cfg.is_empty():
+	if frame == null or _cfg.is_empty() or frame.size.y <= 0.0:
 		return
 	var crop: Rect2 = _cfg["crop"]
 	var factor: float = clampf(frame.size.y / crop.size.y, 0.2, 3.0)
@@ -356,50 +453,220 @@ func open_for(loc: Dictionary) -> void:
 func _refresh(loc: Dictionary) -> void:
 	var hood_id: String = str(loc.get("hood", ""))
 	var shown: String = str(loc.get("district", ""))
+	var district := ""
 	if shown != "":
-		_location_label.text = shown.to_upper()
+		district = shown.to_upper()
 	elif hood_id == "":
-		_location_label.text = "YOUR HOME"
+		district = "YOUR HOME"
 	else:
 		var hood: Dictionary = Catalog.get_neighborhood(hood_id)
-		_location_label.text = str(hood.get("name", hood_id)).to_upper()
+		district = str(hood.get("name", hood_id)).to_upper()
+	_set_value(_location_label, _location_scale, "t_location",
+		_size("s_location", LOCATION_SIZE), district)
 
+	var count := ""
 	match str(_cfg.get("count", "cars")):
 		"impounded":
-			_count_label.text = str(_impounded_cars())
+			count = str(_impounded_cars())
 		"events":
 			# Practice is the only event the game has. Saying 1 is honest;
 			# the artwork's 6 is not.
-			_count_label.text = "1"
+			count = "1"
 		"owned":
-			_count_label.text = str(GameState.garage.size())
+			count = str(GameState.garage.size())
 		_:
-			_count_label.text = str(_stock_for(loc, hood_id).size())
+			count = str(_stock_for(loc, hood_id).size())
+	_set_value(_count_label, _count_scale, "t_count", _size("s_count", STAT_SIZE), count)
 
+	var band := {}
 	match str(_cfg.get("middle", "band")):
 		"release_fee":
-			_price_label.text = _plain(Design.fmt_cash(_impounded_cars() * _fee_per_car()))
+			band = _flat(Design.fmt_cash(_impounded_cars() * _fee_per_car()))
 		"entry_fee":
 			# Practice runs cost nothing -- no wager, no risk, as the panel's
 			# own subtitle says.
-			_price_label.text = _plain("FREE")
+			band = _flat("FREE")
 		"slots":
-			_price_label.text = _plain(str(GameState.parking_limit()))
+			band = _flat(str(GameState.parking_limit()))
 		_:
-			_price_label.text = _price_band(_stock_for(loc, hood_id))
+			band = _price_band(_stock_for(loc, hood_id))
+	_set_value(_price_label, _price_scale, "t_price", _size("s_price", STAT_SIZE),
+		str(band["rich"]), str(band["plain"]))
 
+	# Every panel advertises a stock refresh timer. Nothing rotates stock yet,
+	# so the dash says so rather than counting down to nothing.
+	var third := "--"
 	if str(_cfg.get("third", "none")) == "best_time":
-		_refresh_label.text = _best_time()
+		third = _best_time()
 	elif str(_cfg.get("third", "none")) == "active_ride":
-		_refresh_label.text = _active_ride()
-	else:
-		# Every panel advertises a stock refresh timer. Nothing rotates stock
-		# yet, so this says so rather than counting down to nothing.
-		_refresh_label.text = "--"
+		third = _active_ride()
+	_set_value(_refresh_label, _refresh_scale, "t_refresh",
+		_size("s_refresh", STAT_SIZE), third)
+
+	_fill_previews(_stock_for(loc, hood_id))
 
 
-func _plain(text: String) -> String:
-	return "[color=#%s]%s[/color]" % [INK_WHITE.to_html(false), text]
+## The artwork leaves four empty boxes under INVENTORY PREVIEW, and all four
+## are filled. The cars this dealership stocks come first, cheapest first, the
+## same order the list behind the panel uses. Westbay sells two, so the last
+## two boxes carry on through the folder from where its stock left off --
+## those are shots, not stock, and no photo repeats inside one panel.
+func _fill_previews(stock: Array) -> void:
+	_shot_ring.clear()
+	_shot_page = 0
+
+	var total := _shot_total()
+	var base := _model_index(stock[0]) if not stock.is_empty() else 0
+	for i in stock.size():
+		var art := _car_shot(stock[i])
+		if art != null:
+			_shot_ring.append(art)
+	for k in range(_shot_ring.size(), total):
+		_shot_ring.append(load("%s%d.png" % [CAR_SHOT_DIR, ((base + k) % total) + 1]))
+
+	_paint_previews()
+
+
+## Drops the current window of the ring into the four boxes.
+func _paint_previews() -> void:
+	for i in _previews.size():
+		var shot: TextureRect = _previews[i]
+		var art: Texture2D = null
+		if not _shot_ring.is_empty():
+			art = _shot_ring[(_shot_page + i) % _shot_ring.size()]
+		shot.texture = art
+		shot.visible = art != null
+
+
+## The chevron at the end of the strip. Each press walks the window on by one
+## car and wraps at the end, so the strip streams instead of dead-ending.
+func _on_next_shot() -> void:
+	if _previews.is_empty() or _shot_ring.size() <= _previews.size():
+		return
+	# A second press mid-slide would skip a car and leave a box parked.
+	if _shot_tween != null and _shot_tween.is_valid():
+		return
+
+	_shot_page = (_shot_page + 1) % _shot_ring.size()
+
+	var travel: float = _previews[0].size.x * SHOT_TRAVEL
+	_shot_tween = create_tween().set_parallel(true)
+	for i in _previews.size():
+		var shot: TextureRect = _previews[i]
+		var delay: float = i * SHOT_STAGGER
+		_shot_tween.tween_property(shot, "modulate:a", 0.0, SHOT_OUT).set_delay(delay)
+		_shot_tween.tween_property(shot, "position:x", shot.position.x - travel, SHOT_OUT) \
+			.set_delay(delay).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	_shot_tween.chain().tween_callback(_enter_shots.bind(travel))
+
+
+## The second half of the turn: the next window is dealt in from the right.
+func _enter_shots(travel: float) -> void:
+	_paint_previews()
+	for shot in _previews:
+		shot.position.x += travel * 2.0
+
+	var enter := create_tween().set_parallel(true)
+	for i in _previews.size():
+		var shot: TextureRect = _previews[i]
+		var delay: float = i * SHOT_STAGGER
+		enter.tween_property(shot, "modulate:a", 1.0, SHOT_IN).set_delay(delay)
+		enter.tween_property(shot, "position:x", shot.position.x - travel, SHOT_IN) \
+			.set_delay(delay).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	enter.chain().tween_callback(_settle_shots)
+	_shot_tween = enter
+
+
+## Hands the boxes back to the layout. The slide drives `position`, which sets
+## offsets of its own; clearing them puts each photo back on its anchors, so
+## the next resize places it from the artwork's rect and not from wherever the
+## animation left it.
+func _settle_shots() -> void:
+	for shot in _previews:
+		shot.offset_left = 0
+		shot.offset_top = 0
+		shot.offset_right = 0
+		shot.offset_bottom = 0
+		shot.modulate.a = 1.0
+
+
+## A resize outranks a page turn in flight -- the boxes move with the panel,
+## and a half-finished slide would leave a photo off its slot.
+func _on_frame_resized() -> void:
+	_rescale_type()
+	if _shot_tween != null and _shot_tween.is_valid():
+		_shot_tween.kill()
+		_paint_previews()
+	_settle_shots()
+
+
+## A car's photograph. A shot named for the model's own `spriteSet` wins, so
+## renaming a file to bantam_gx.png pins it to that car for good. Failing
+## that the catalog's order picks one of the numbered shots: stable for a
+## given car, and consecutive, so the two or three cars in any one dealership
+## never land on the same photo.
+func _car_shot(model: Dictionary) -> Texture2D:
+	var named := "%s%s.png" % [CAR_SHOT_DIR, str(model.get("spriteSet", ""))]
+	if ResourceLoader.exists(named):
+		return load(named)
+
+	var total := _shot_total()
+	if total == 0:
+		return null
+	return load("%s%d.png" % [CAR_SHOT_DIR, (_model_index(model) % total) + 1])
+
+
+## Where a model sits in the catalog, which is what picks its numbered shot.
+func _model_index(model: Dictionary) -> int:
+	var models: Array = Catalog.all_car_models()
+	for i in models.size():
+		if str(models[i].get("id", "")) == str(model.get("id", "")):
+			return i
+	return 0
+
+
+static func _shot_total() -> int:
+	if _shots < 0:
+		_shots = 0
+		while ResourceLoader.exists("%s%d.png" % [CAR_SHOT_DIR, _shots + 1]):
+			_shots += 1
+	return _shots
+
+
+## The size the artwork sets a value at, where it was measured, or the shared
+## default on the panels that have not been measured value by value.
+func _size(key: String, fallback: int) -> int:
+	return int(_cfg.get(key, fallback))
+
+
+## Writes one redrawn value and steps its type down if the string would spill
+## past the plate the artwork leaves for it -- the mono face runs about a fifth
+## wider per glyph than the type painted into the art, so a sixteen-character
+## district or a four-tier price band needs the room. `measure` is the string
+## as it prints, without the colour markup the price band carries.
+func _set_value(node: Control, entry: Dictionary, box_key: String, base: int,
+		text: String, measure := "") -> void:
+	node.set("text", text)
+
+	var box: Rect2 = _cfg[box_key]
+	var shown := measure if measure != "" else text
+	var size := base
+	var face: FontFile = entry.get("font", null)
+	if face != null:
+		while size > VALUE_MIN_SIZE and face.get_string_size(
+				shown, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x > box.size.x:
+			size -= 1
+	entry["size"] = size
+	_rescale_type()
+
+
+## A single-colour value, in the artwork's own white, paired with the plain
+## string to measure it by.
+func _flat(text: String) -> Dictionary:
+	return {
+		"rich": "[color=#%s]%s[/color]" % [INK_WHITE.to_html(false), text],
+		"plain": text,
+	}
 
 
 ## Quickest pass the player has run, across every car they own.
@@ -446,9 +713,9 @@ func _stock_for(loc: Dictionary, hood_id: String) -> Array:
 
 
 ## Cheapest to dearest, as the artwork's dollar signs.
-func _price_band(stock: Array) -> String:
+func _price_band(stock: Array) -> Dictionary:
 	if stock.is_empty():
-		return "[color=#%s]--[/color]" % INK_WHITE.to_html(false)
+		return _flat("--")
 
 	var low: int = stock[0].get("price", 0)
 	var high: int = low
@@ -457,10 +724,13 @@ func _price_band(stock: Array) -> String:
 		low = mini(low, p)
 		high = maxi(high, p)
 
-	return "[color=#%s]%s[/color] - [color=#%s]%s[/color]" % [
-		INK_WHITE.to_html(false), _dollars(low),
-		INK_AMBER.to_html(false), _dollars(high),
-	]
+	return {
+		"rich": "[color=#%s]%s[/color] - [color=#%s]%s[/color]" % [
+			INK_WHITE.to_html(false), _dollars(low),
+			INK_AMBER.to_html(false), _dollars(high),
+		],
+		"plain": "%s - %s" % [_dollars(low), _dollars(high)],
+	}
 
 
 func _dollars(price: int) -> String:

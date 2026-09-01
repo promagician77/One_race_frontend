@@ -3,16 +3,18 @@ extends ArtScreen
 ## before there is a session. CREATE ACCOUNT hands off to the sign-up page.
 
 # Painted element positions, measured off screen.png ──────────────
-const R_NAME_TEXT  := Rect2(210, 384, 430, 33)
-const R_PASS_TEXT  := Rect2(210, 471, 385, 34)
+# The field rects are the interiors of the painted boxes, from just past the
+# icon divider to the border (to the eye, where there is one).
+const R_NAME_TEXT  := Rect2(205, 382, 434, 42)
+const R_PASS_TEXT  := Rect2(205, 467, 385, 42)
 const R_EYE        := Rect2(596, 472, 46, 33)
 const R_START      := Rect2(150, 532, 495, 68)
 const R_LOGIN      := Rect2(148, 623, 244, 45)
 const R_GUEST      := Rect2(400, 623, 245, 45)
 const R_CREATE     := Rect2(148, 683, 497, 45)
-const R_STATUS     := Rect2(95, 780, 595, 80)
-const R_SETTINGS   := Rect2(1281, 764, 115, 114)
-const R_EXIT       := Rect2(1438, 764, 115, 114)
+# Both are painted hexagons; the rects are their full extents, points included.
+const R_SETTINGS   := Rect2(1262, 764, 140, 118)
+const R_EXIT       := Rect2(1427, 764, 138, 118)
 
 var _busy := false
 
@@ -31,19 +33,19 @@ func _ready() -> void:
 	build_art()
 	_build_fields()
 	_build_buttons()
-	build_status(R_STATUS)
+	build_notice()
 
 	_name_field.grab_focus()
 
 
 func _build_fields() -> void:
-	_name_field = make_field(false)
+	_name_field = make_field("Enter your racer name", false)
 	_name_field.text_submitted.connect(_on_field_submit)
-	place(_name_field, R_NAME_TEXT, "R_NAME_TEXT")
+	place_field(_name_field, R_NAME_TEXT, "R_NAME_TEXT")
 
-	_pass_field = make_field(true)
+	_pass_field = make_field("Enter your password", true)
 	_pass_field.text_submitted.connect(_on_field_submit)
-	place(_pass_field, R_PASS_TEXT, "R_PASS_TEXT")
+	place_field(_pass_field, R_PASS_TEXT, "R_PASS_TEXT")
 
 	var eye := make_hit("Show or hide your password")
 	eye.pressed.connect(_on_reveal)
@@ -71,13 +73,13 @@ func _build_buttons() -> void:
 	guest.pressed.connect(_on_guest)
 	place(guest, R_GUEST, "R_GUEST")
 
-	var settings := make_hit("Settings arrive with the options screen")
+	# Painted hexagons, so these light themselves instead of taking a wash.
+	var settings := place_icon_hit(R_SETTINGS,
+		"Settings arrive with the options screen", "R_SETTINGS")
 	settings.pressed.connect(_on_settings)
-	place(settings, R_SETTINGS, "R_SETTINGS")
 
-	var quit := make_hit("Quit the game")
+	var quit := place_icon_hit(R_EXIT, "Quit the game", "R_EXIT")
 	quit.pressed.connect(_on_quit)
-	place(quit, R_EXIT, "R_EXIT")
 
 
 # ─────────────────────────────────────────────────────────────

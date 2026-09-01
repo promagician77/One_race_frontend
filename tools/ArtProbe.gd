@@ -1,119 +1,91 @@
 extends Node
-## Finds the exact bounds and colour of text painted into a panel, so masks
-## can be sized to cover it and replacement type can match it.
+## Measures the painted value text on each location panel, matching ink by
+## hue rather than brightness.
+##
+## Brightness alone is wrong here: the location name sits on a lit skyline
+## photo, so a brightness threshold returns the photo's bounds, not the
+## name's. Matching the panel's own ink colour finds the glyphs and nothing
+## else -- which is how the masks in LocationModal are cut.
 
-const ART := "res://assets/ui/partshop.png"
-
-## Search boxes to inspect, in source-image pixels. Each should bracket one
-## painted value with a little room around it.
-const PROBES := []
-
-## Single points sampled for flat background colour, so masks blend in.
-const SAMPLES := [
-	["count_above",  Vector2i(270, 700)],
-	["count_below",  Vector2i(270, 762)],
-	["count_right",  Vector2i(330, 730)],
-	["price_above",  Vector2i(600, 696)],
-	["price_below",  Vector2i(600, 764)],
-	["refresh_above", Vector2i(830, 694)],
-	["refresh_below", Vector2i(830, 764)],
-	["loc_above",    Vector2i(300, 452)],
-	["loc_below",    Vector2i(300, 540)],
+const KINDS := [
+	{ "name": "DEALERSHIP", "art": "res://assets/ui/dealership.png", "ink": Color("#31CDF7"),
+	  "cells": [Rect2i(170, 430, 380, 120), Rect2i(200, 650, 200, 110),
+				Rect2i(420, 650, 300, 110), Rect2i(700, 640, 280, 120)] },
+	{ "name": "PARTS_SHOP", "art": "res://assets/ui/partshop.png", "ink": Color("#FF9B03"),
+	  "cells": [Rect2i(170, 440, 400, 120), Rect2i(200, 680, 210, 110),
+				Rect2i(430, 680, 320, 110), Rect2i(700, 670, 300, 120)] },
+	{ "name": "IMPOUND", "art": "res://assets/ui/impound.png", "ink": Color("#FF3C37"),
+	  "cells": [Rect2i(190, 430, 400, 120), Rect2i(220, 670, 200, 110),
+				Rect2i(450, 660, 320, 110), Rect2i(750, 660, 290, 120)] },
+	{ "name": "PRACTICE", "art": "res://assets/ui/racestack.png", "ink": Color("#FFBA0B"),
+	  "cells": [Rect2i(160, 380, 400, 110), Rect2i(200, 740, 200, 110),
+				Rect2i(440, 740, 300, 110), Rect2i(680, 740, 320, 110)] },
+	{ "name": "GARAGE", "art": "res://assets/ui/home.png", "ink": Color("#FF9D05"),
+	  "cells": [Rect2i(180, 340, 400, 110), Rect2i(220, 750, 200, 110),
+				Rect2i(460, 750, 220, 110), Rect2i(700, 740, 300, 120)] },
 ]
 
-const BRIGHT := 0.30   ## luminance above which a pixel counts as ink
+const LABELS := ["location", "count", "price", "refresh"]
+
+## How close a pixel's hue must be to the panel's ink, in degrees.
+const HUE_TOLERANCE := 26.0
+const MIN_SAT := 0.45
+const MIN_VAL := 0.35
 
 
 func _ready() -> void:
-	var img: Image = (load(ART) as Texture2D).get_image()
-	if img.is_compressed():
-		img.decompress()
-	img.convert(Image.FORMAT_RGBA8)
-
-	print("")
-	for probe in PROBES:
-		var label: String = probe[0]
-		var box: Rect2i = probe[1]
-
-		var min_x := box.position.x + box.size.x
-		var max_x := box.position.x - 1
-		var min_y := box.position.y + box.size.y
-		var max_y := box.position.y - 1
-		var r := 0.0
-		var g := 0.0
-		var b := 0.0
-		var n := 0
-		var best := Color.BLACK
-		var best_lum := 0.0
-
-		for y in range(box.position.y, box.position.y + box.size.y):
-			for x in range(box.position.x, box.position.x + box.size.x):
-				if x < 0 or y < 0 or x >= img.get_width() or y >= img.get_height():
-					continue
-				var c := img.get_pixel(x, y)
-				if maxf(c.r, maxf(c.g, c.b)) < BRIGHT:
-					continue
-				min_x = mini(min_x, x)
-				max_x = maxi(max_x, x)
-				min_y = mini(min_y, y)
-				max_y = maxi(max_y, y)
-				r += c.r
-				g += c.g
-				b += c.b
-				n += 1
-				var lum := maxf(c.r, maxf(c.g, c.b))
-				if lum > best_lum:
-					best_lum = lum
-					best = c
-
-		if n == 0:
-			print("%-10s  nothing above %.2f luminance" % [label, BRIGHT])
+	for kind in KINDS:
+		var art_path: String = kind["art"]
+		if not ResourceLoader.exists(art_path):
+			print("%s: missing %s" % [kind["name"], art_path])
 			continue
 
-		print("%-10s  Rect2(%d, %d, %d, %d)   h=%d   mean=#%s   brightest=#%s" % [
-			label, min_x, min_y, max_x - min_x + 1, max_y - min_y + 1,
-			max_y - min_y + 1,
-			Color(r / n, g / n, b / n).to_html(false), best.to_html(false),
-		])
-	# How much of the panel does the corner key actually eat? Anything inside
-	# the smoothstep range is rendered semi-transparent.
-	var crop := Rect2i(62, 50, 903, 1445)
-	var below_high := 0
-	var below_low := 0
-	var total := 0
-	for y in range(crop.position.y, crop.position.y + crop.size.y, 3):
-		for x in range(crop.position.x, crop.position.x + crop.size.x, 3):
-			var c := img.get_pixel(x, y)
-			var lum := maxf(c.r, maxf(c.g, c.b))
-			total += 1
-			if lum < 0.022:
-				below_high += 1
-			if lum < 0.006:
-				below_low += 1
-	print("inside crop: %.1f%% below 0.022 (faded by the key), %.1f%% below 0.006"
-		% [100.0 * below_high / total, 100.0 * below_low / total])
+		var img: Image = (load(art_path) as Texture2D).get_image()
+		if img.is_compressed():
+			img.decompress()
+		img.convert(Image.FORMAT_RGBA8)
 
-	for smp in SAMPLES:
-		var pt: Vector2i = smp[1]
-		var c := img.get_pixel(pt.x, pt.y)
-		print("%-14s (%4d,%4d)  #%s" % [smp[0], pt.x, pt.y, c.to_html(false)])
+		var ink: Color = kind["ink"]
+		print("\n%s  (%dx%d)" % [kind["name"], img.get_width(), img.get_height()])
 
-	var w := img.get_width()
-	var h := img.get_height()
-	var cx1 := w
-	var cx2 := -1
-	var cy1 := h
-	var cy2 := -1
-	for y in range(0, h, 2):
-		for x in range(0, w, 2):
-			var c := img.get_pixel(x, y)
-			if maxf(c.r, maxf(c.g, c.b)) <= 0.05:
+		var cells: Array = kind["cells"]
+		for i in cells.size():
+			var box: Rect2i = cells[i]
+			var r := _ink_bounds(img, box, ink)
+			if r == Rect2i():
+				print("  %-9s  no ink found in %s" % [LABELS[i], box])
 				continue
-			cx1 = mini(cx1, x)
-			cx2 = maxi(cx2, x)
-			cy1 = mini(cy1, y)
-			cy2 = maxi(cy2, y)
-	print("\ncontent box -> Rect2(%d, %d, %d, %d)   has_alpha=%s"
-		% [cx1, cy1, cx2 - cx1 + 1, cy2 - cy1 + 1, img.detect_alpha()])
+			print('  "%s": Rect2(%d, %d, %d, %d),'
+				% [LABELS[i], r.position.x, r.position.y, r.size.x, r.size.y])
 	print("")
 	get_tree().quit()
+
+
+func _ink_bounds(img: Image, box: Rect2i, ink: Color) -> Rect2i:
+	var target := ink.h * 360.0
+	var min_x := box.position.x + box.size.x
+	var max_x := box.position.x - 1
+	var min_y := box.position.y + box.size.y
+	var max_y := box.position.y - 1
+
+	for y in range(box.position.y, box.position.y + box.size.y):
+		if y < 0 or y >= img.get_height():
+			continue
+		for x in range(box.position.x, box.position.x + box.size.x):
+			if x < 0 or x >= img.get_width():
+				continue
+			var c := img.get_pixel(x, y)
+			if c.s < MIN_SAT or c.v < MIN_VAL:
+				continue
+			var diff: float = absf(c.h * 360.0 - target)
+			diff = minf(diff, 360.0 - diff)
+			if diff > HUE_TOLERANCE:
+				continue
+			min_x = mini(min_x, x)
+			max_x = maxi(max_x, x)
+			min_y = mini(min_y, y)
+			max_y = maxi(max_y, y)
+
+	if max_x < min_x:
+		return Rect2i()
+	return Rect2i(min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)

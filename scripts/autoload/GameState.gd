@@ -9,6 +9,16 @@ signal neighborhood_changed(neighborhood_id: String)
 signal garage_changed()
 signal active_car_changed(car_id: String)
 
+## The server owns the truth. Everything below is a cache of what it last
+## told us, kept so screens can render without a round trip per label.
+##
+## Read helpers (can_afford, parking_limit, can_shop_in, ...) answer from that
+## cache, which is fine: they exist to grey out buttons before a request is
+## sent. Every rule they check is enforced again server-side, so a stale cache
+## can only ever produce a refusal the player could have got anyway.
+##
+## Mutations go to the server and apply what comes back. None of them change
+## local state on their own.
 const SAVE_PATH := "user://save.json"
 
 var player := {
@@ -46,6 +56,132 @@ func _new_player() -> void:
 # ─────────────────────────────────────────────────────────────
 # CASH
 # ─────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────
+# SERVER SYNC
+# ─────────────────────────────────────────────────────────────
+
+## Pull the player and their garage from the server. Called after sign-in and
+## any time the cache might be stale.
+func hydrate() -> Dictionary:
+	var me: Dictionary = await Api.refresh_me()
+	if not me.ok:
+		return me
+
+	_apply_player(me.data.get("player", {}))
+
+	var g: Dictionary = await Api.fetch_garage()
+	if not g.ok:
+		return g
+
+	_apply_garage(g.data)
+	garage_changed.emit()
+	save_game()
+	return {"ok": true}
+
+
+## The server speaks camelCase and a flat car; the client's screens were built
+## against snake_case with parts and tune grouped. Translating here keeps that
+## difference in one place instead of spread across every screen.
+## A string from the server, treating JSON null as absent.
+##
+## Dictionary.get()'s default only applies when the key is missing. The server
+## sends activeCarId as null for a player with no car, so str() on it produced
+## the literal text "<null>" -- which is not empty, so every "has an active
+## car" check passed and every lookup for it failed.
+func _text(source: Dictionary, key: String, fallback: String = "") -> String:
+	var raw = source.get(key, null)
+	return fallback if raw == null else str(raw)
+
+
+func _apply_player(p: Dictionary) -> void:
+	if p.is_empty():
+		return
+	var before_cash: int = int(player.get("cash", 0))
+	var before_hood: String = str(player.get("neighborhood", ""))
+
+	player.id = _text(p, "id", str(player.get("id", "")))
+	player.username = _text(p, "username", str(player.get("username", "")))
+	player.cash = int(p.get("cash", 0))
+	player.neighborhood = _text(p, "neighborhood", "HARBOUR")
+	player.street_credit = int(p.get("streetCredit", 0))
+	player.rank = _text(p, "rank", "Noob")
+	player.total_races = int(p.get("totalRaces", 0))
+	player.wins = int(p.get("wins", 0))
+
+	var server_active := _text(p, "activeCarId")
+	if server_active != "" and server_active != active_car_id:
+		active_car_id = server_active
+		active_car_changed.emit(active_car_id)
+
+	if int(player.cash) != before_cash:
+		cash_changed.emit(int(player.cash))
+	if str(player.neighborhood) != before_hood:
+		neighborhood_changed.emit(str(player.neighborhood))
+
+
+func _apply_garage(cars: Array) -> void:
+	garage.clear()
+	for c in cars:
+		garage.append(_car_from_server(c))
+
+
+## Replace one car in the cache, or add it if it is new.
+func _apply_car(server_car: Dictionary) -> void:
+	if server_car.is_empty():
+		return
+	var car := _car_from_server(server_car)
+	var idx := _car_index(str(car.id))
+	if idx >= 0:
+		garage[idx] = car
+	else:
+		garage.append(car)
+
+
+func _car_from_server(c: Dictionary) -> Dictionary:
+	return {
+		"id": _text(c, "id"),
+		"model_id": _text(c, "modelId"),
+		"nickname": _text(c, "nickname"),
+		"paint_color": _text(c, "paintColor", "#1A1A1A"),
+		"plate": _text(c, "plate"),
+		"impounded": bool(c.get("impounded", false)),
+		"installed": {
+			"engine": _text(c, "engineId"),
+			"intake": _text(c, "intakeId"),
+			"exhaust": _text(c, "exhaustId"),
+			"turbo": _text(c, "turboId"),
+			"nitrous": _text(c, "nitrousId"),
+			"tires": _text(c, "tiresId"),
+			"suspension": _text(c, "suspensionId"),
+			"trans": _text(c, "transId"),
+			"body": _text(c, "bodyId"),
+		},
+		"tune": {
+			"gear_ratios": c.get("gearRatios", []),
+			"final_drive": float(c.get("finalDrive", 4.10)),
+			"launch_rpm": int(c.get("launchRpm", 0)),
+			"shift_points": c.get("shiftPoints", []),
+			"tire_pressure": float(c.get("tirePressure", 32.0)),
+			"clutch_release": float(c.get("clutchRelease", 0.5)),
+			"afr": float(c.get("afr", 14.7)),
+			"compression": float(c.get("compression", 9.5)),
+			"nitrous_point": float(c.get("nitrousPoint", 0.0)),
+		},
+		"condition": {
+			"engine_health": float(c.get("engineHealth", 100.0)),
+			"stress_accum": float(c.get("stressAccum", 0.0)),
+			"passes_since_rebuild": int(c.get("passesSinceRebuild", 0)),
+		},
+		"best_et": c.get("bestEt", null),
+		"best_ts": c.get("bestTs", null),
+	}
+
+
+## Turn an Api failure into the { ok, reason } shape the screens already read.
+func _refused(res: Dictionary) -> Dictionary:
+	return {"ok": false, "reason": str(res.get("message", "That did not work."))}
+
 
 func can_afford(amount: int) -> bool:
 	return player.cash >= amount
@@ -126,31 +262,37 @@ func can_move_to(neighborhood_id: String) -> Dictionary:
 	return {"ok": true, "cost": 0, "impound": over}
 
 
+## Moving is a paid, permanent decision, so the server decides it. The local
+## check first is only to avoid a pointless round trip.
 func move_to(neighborhood_id: String) -> Dictionary:
 	var check := can_move_to(neighborhood_id)
 	if not check.ok:
 		return check
 
-	if check.get("cost", 0) > 0:
-		spend(check.cost)
+	var res: Dictionary = await Api.move_to(neighborhood_id)
+	if not res.ok:
+		return _refused(res)
 
-	player.neighborhood = neighborhood_id
+	_apply_player(res.data.get("player", {}))
 
-	# Impound anything over the new limit — oldest cars stay, newest go
-	var limit: int = parking_limit()
-	if garage.size() > limit:
-		for i in range(limit, garage.size()):
-			garage[i]["impounded"] = true
+	# Moving down impounds whatever no longer fits, so the garage the server
+	# holds is not the one we cached a moment ago.
+	var g: Dictionary = await Api.fetch_garage()
+	if g.ok:
+		_apply_garage(g.data)
 
 	neighborhood_changed.emit(neighborhood_id)
 	garage_changed.emit()
 	save_game()
-	return check
+	return {"ok": true, "cost": check.get("cost", 0), "impound": check.get("impound", 0)}
+
 
 # ─────────────────────────────────────────────────────────────
 # GARAGE
 # ─────────────────────────────────────────────────────────────
 
+## The server takes the money and creates the car. The checks here run first
+## purely so an obvious refusal costs nothing; the server enforces them again.
 func buy_car(model_id: String) -> Dictionary:
 	var model := Catalog.get_car_model(model_id)
 	if model.is_empty():
@@ -165,53 +307,109 @@ func buy_car(model_id: String) -> Dictionary:
 	if not can_afford(model.price):
 		return {"ok": false, "reason": "You need %s for this car." % Design.fmt_cash(model.price)}
 
-	spend(model.price)
+	var res: Dictionary = await Api.buy_car(model_id)
+	if not res.ok:
+		return _refused(res)
 
-	var car := _build_car(model)
-	garage.append(car)
+	_apply_car(res.data.get("car", {}))
+	set_cash(int(res.data.get("cash", player.cash)))
 
 	if active_car_id == "":
-		set_active_car(car.id)
+		var bought := str(res.data.get("car", {}).get("id", ""))
+		if bought != "":
+			await set_active_car(bought)
 
 	garage_changed.emit()
 	save_game()
-	return {"ok": true, "car": car}
+	return {"ok": true, "car": get_car(str(res.data.get("car", {}).get("id", "")))}
 
 
 func sell_car(car_id: String) -> Dictionary:
-	var idx := _car_index(car_id)
-	if idx < 0:
+	if _car_index(car_id) < 0:
 		return {"ok": false, "reason": "Car not found."}
 
-	var car: Dictionary = garage[idx]
-	var model := Catalog.get_car_model(car.model_id)
+	var res: Dictionary = await Api.sell_car(car_id)
+	if not res.ok:
+		return _refused(res)
 
-	# 60% of base price back, plus 40% of installed part value
-	var refund: int = int(model.get("price", 0) * 0.60)
-	for cat in car.installed:
-		var pid: String = car.installed[cat]
-		if pid != "":
-			var part := Catalog.get_part(pid)
-			refund += int(part.get("price", 0) * 0.40)
+	var idx := _car_index(car_id)
+	if idx >= 0:
+		garage.remove_at(idx)
 
-	garage.remove_at(idx)
-	earn(refund)
+	set_cash(int(res.data.get("cash", player.cash)))
 
 	if active_car_id == car_id:
-		active_car_id = garage[0].id if garage.size() > 0 else ""
+		active_car_id = str(garage[0].id) if garage.size() > 0 else ""
 		active_car_changed.emit(active_car_id)
 
 	garage_changed.emit()
 	save_game()
-	return {"ok": true, "refund": refund}
+	return {"ok": true, "refund": int(res.data.get("refund", 0))}
 
 
-func set_active_car(car_id: String) -> void:
+func set_active_car(car_id: String) -> Dictionary:
 	if _car_index(car_id) < 0:
-		return
+		return {"ok": false, "reason": "Car not found."}
+
+	var res: Dictionary = await Api.set_active_car(car_id)
+	if not res.ok:
+		return _refused(res)
+
+	_apply_player(res.data.get("player", {}))
 	active_car_id = car_id
 	active_car_changed.emit(car_id)
 	save_game()
+	return {"ok": true}
+
+
+# ─────────────────────────────────────────────────────────────
+# PARTS AND TUNING
+#
+# Thin passes to the server. The car that comes back is authoritative --
+# installing a part changes cash, weight, airflow and stress at once, and
+# recomputing any of that here would be a second implementation to drift.
+# ─────────────────────────────────────────────────────────────
+
+func install_part(car_id: String, part_id: String) -> Dictionary:
+	var res: Dictionary = await Api.install_part(car_id, part_id)
+	if not res.ok:
+		return _refused(res)
+	_apply_car(res.data.get("car", {}))
+	set_cash(int(res.data.get("cash", player.cash)))
+	garage_changed.emit()
+	save_game()
+	return {"ok": true, "stats": res.data.get("stats", {})}
+
+
+func remove_part(car_id: String, category: String) -> Dictionary:
+	var res: Dictionary = await Api.remove_part(car_id, category)
+	if not res.ok:
+		return _refused(res)
+	_apply_car(res.data.get("car", {}))
+	garage_changed.emit()
+	save_game()
+	return {"ok": true, "stats": res.data.get("stats", {})}
+
+
+func tune_car(car_id: String, tune: Dictionary) -> Dictionary:
+	var res: Dictionary = await Api.tune_car(car_id, tune)
+	if not res.ok:
+		return _refused(res)
+	_apply_car(res.data.get("car", {}))
+	garage_changed.emit()
+	save_game()
+	return {"ok": true, "stats": res.data.get("stats", {})}
+
+
+func release_from_impound(car_id: String) -> Dictionary:
+	var res: Dictionary = await Api.release_from_impound(car_id)
+	if not res.ok:
+		return _refused(res)
+	_apply_car(res.data.get("car", {}))
+	set_cash(int(res.data.get("cash", player.cash)))
+	garage_changed.emit()
+	save_game()
+	return {"ok": true}
 
 
 func get_car(car_id: String) -> Dictionary:
@@ -230,53 +428,12 @@ func _car_index(car_id: String) -> int:
 	return -1
 
 
-func _build_car(model: Dictionary) -> Dictionary:
-	var gears: int = model.get("gearCount", 5)
-	return {
-		"id": _uuid(),
-		"model_id": model.id,
-		"nickname": model.name,
-		"paint_color": "#1A1A1A",
-		"plate": _plate(),
-		"impounded": false,
-		"installed": {
-			"engine": "", "intake": "", "exhaust": "", "turbo": "",
-			"nitrous": "", "tires": "", "suspension": "", "trans": "", "body": "",
-		},
-		"tune": {
-			"gear_ratios": _default_gears(gears),
-			"final_drive": 4.10,
-			"launch_rpm": int(model.get("redline", 7000) * 0.45),
-			"shift_points": _default_shifts(gears, model.get("redline", 7000)),
-			"tire_pressure": 32.0,
-			"clutch_release": 0.5,
-			"afr": 14.7,
-			"compression": 9.5,
-			"nitrous_point": 0.0,
-		},
-		"condition": {
-			"engine_health": 100.0,
-			"stress_accum": 0.0,
-			"passes_since_rebuild": 0,
-		},
-		"best_et": null,
-		"best_ts": null,
-	}
-
-
-func _default_gears(count: int) -> Array:
-	var full := [3.30, 2.10, 1.50, 1.15, 0.92, 0.76]
-	return full.slice(0, count)
-
-
-func _default_shifts(count: int, redline: int) -> Array:
-	var pts := []
-	for i in range(count - 1):
-		pts.append(int(redline * 0.92))
-	return pts
-
 # ─────────────────────────────────────────────────────────────
 # PERSISTENCE
+#
+# A cache, not a save file. The server holds the real player and garage; this
+# only lets the game draw something familiar before the first response lands.
+# Nothing here is trusted: hydrate() overwrites all of it on sign-in.
 # ─────────────────────────────────────────────────────────────
 
 func save_game() -> void:

@@ -160,3 +160,54 @@ func impound_config() -> Dictionary:
 
 func starting_cash() -> int:
 	return _starting_cash
+
+
+# ─────────────────────────────────────────────────────────────
+# CAR PHOTOGRAPHS
+#
+# One place decides what a car looks like. The dealership worked this out for
+# itself, so the garage and the part shop were falling back to the procedural
+# placeholder sprites and showing a flat silhouette of a car the showroom had
+# a photograph of.
+# ─────────────────────────────────────────────────────────────
+
+const CAR_SHOT_DIR := "res://assets/ui/cars/"
+
+var _shot_count := -1
+
+
+## The photograph for a car model.
+##
+## A file named for the model's own `spriteSet` wins, so renaming a shot to
+## bantam_gx.png pins it to that car for good. Anything without one is dealt a
+## numbered shot by its position in the catalog, which is stable between runs.
+func car_shot(model: Dictionary) -> Texture2D:
+	if model.is_empty():
+		return null
+
+	var named := "%s%s.png" % [CAR_SHOT_DIR, str(model.get("spriteSet", ""))]
+	if ResourceLoader.exists(named):
+		return load(named)
+
+	var total := car_shot_count()
+	if total == 0:
+		return null
+	return load("%s%d.png" % [CAR_SHOT_DIR, (_model_index(model) % total) + 1])
+
+
+## How many numbered shots ship. Counted once.
+func car_shot_count() -> int:
+	if _shot_count < 0:
+		_shot_count = 0
+		while ResourceLoader.exists("%s%d.png" % [CAR_SHOT_DIR, _shot_count + 1]):
+			_shot_count += 1
+	return _shot_count
+
+
+func _model_index(model: Dictionary) -> int:
+	var models: Array = all_car_models()
+	for i in models.size():
+		if str(models[i].get("id", "")) == str(model.get("id", "")):
+			return i
+	return 0
+

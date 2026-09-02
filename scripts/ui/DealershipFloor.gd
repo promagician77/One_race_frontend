@@ -16,10 +16,6 @@ extends Control
 signal car_selected(model_id: String)
 signal car_bought(car: Dictionary)
 
-## Car photographs, the same numbered cutouts LocationModal previews. A shot
-## named for the model's own `spriteSet` wins, so renaming a file to
-## bantam_gx.png pins it to that car for good.
-const CAR_SHOT_DIR := "res://assets/ui/cars/"
 
 ## The sidebar's categories against the classes the data actually carries.
 ## Only MUSCLE is a straight match; the rest are the column's showroom words
@@ -169,7 +165,6 @@ const BUY_SCRIM := Color(0, 0, 0, 0.66)
 ## see what is coming, they just cannot have it yet.
 const DIM_LOCKED := Color(0.45, 0.45, 0.45, 1.0)
 
-static var _shots := -1
 
 var _models: Array = []          ## Everything the filter let through, in order
 var _page_models: Array = []     ## The slice on screen, parallel to _cards
@@ -177,6 +172,7 @@ var _cards: Array = []           ## Card buttons for the current page
 var _page := 0
 var _per := 0                    ## Cards per page, from the strip's real width
 var _selected := ""              ## model_id, or "" when the filter came back empty
+var _buying := false             ## a purchase is in flight; the button is shut
 
 var _category := "ALL CARS"
 var _sort := "PRICE: LOW TO HIGH"
@@ -894,9 +890,22 @@ func _on_buy() -> void:
 	if model.is_empty():
 		return
 
+	# Buying is a round trip to the server now, so the button has to be shut
+	# for the duration -- otherwise an impatient second click buys a second
+	# car, and the player finds out when their cash is gone.
+	if _buying:
+		return
+	_buying = true
+	_buy.disabled = true
+	_say("Buying %s..." % model.name, Design.TEXT_BODY)
+
 	# GameState is the authority on whether this is allowed. The button being
 	# enabled is a prediction; this is the decision.
-	var res: Dictionary = GameState.buy_car(str(model.id))
+	var res: Dictionary = await GameState.buy_car(str(model.id))
+
+	_buying = false
+	_paint_buy(model)
+
 	if not res.get("ok", false):
 		_say(str(res.get("reason", "That didn't go through.")), Design.BAD)
 		return
@@ -988,38 +997,21 @@ func _card_box(bg: Color, edge: Color, width: int) -> StyleBoxFlat:
 ## A shot named for the model's own `spriteSet` wins. Failing that the
 ## catalog's order picks one of the numbered shots: stable for a given car,
 ## and consecutive, so neighbours in the strip never land on the same photo.
+## Which photograph a car gets. The rule lives in Catalog so the garage and
+## the part shop show the same car this showroom does.
 func _car_shot(model: Dictionary) -> Texture2D:
-	if model.is_empty():
-		return null
-
-	var named := "%s%s.png" % [CAR_SHOT_DIR, str(model.get("spriteSet", ""))]
-	if ResourceLoader.exists(named):
-		return load(named)
-
-	var total := _shot_total()
-	if total == 0:
-		return null
-	return load("%s%d.png" % [CAR_SHOT_DIR, (_model_index(model) % total) + 1])
+	return Catalog.car_shot(model)
 
 
-## Which tyre line to stand this photograph on.
+## Where a photograph's tyres sit, as a fraction of its height.
+##
+## Looked up rather than scanned: reading the pixels at layout time reaches
+## into the renderer mid-frame, which is what filled the strip with garbage
+## before. The eight shipped shots are measured into GROUND above; anything
+## dropped in under a model's own spriteSet name sits on WHEEL_LINE until it
+## is measured and added there.
 func _ground_line(tex: Texture2D) -> float:
 	if tex == null:
 		return WHEEL_LINE
-	return GROUND.get(tex.resource_path.get_file(), WHEEL_LINE)
+	return float(GROUND.get(str(tex.resource_path).get_file(), WHEEL_LINE))
 
-
-func _model_index(model: Dictionary) -> int:
-	var models: Array = Catalog.all_car_models()
-	for i in models.size():
-		if str(models[i].get("id", "")) == str(model.get("id", "")):
-			return i
-	return 0
-
-
-static func _shot_total() -> int:
-	if _shots < 0:
-		_shots = 0
-		while ResourceLoader.exists("%s%d.png" % [CAR_SHOT_DIR, _shots + 1]):
-			_shots += 1
-	return _shots

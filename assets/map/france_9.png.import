@@ -1,0 +1,38 @@
+[remap]
+
+importer="texture"
+type="CompressedTexture2D"
+uid="uid://c7so36lre3ndn"
+path.s3tc="res://.godot/imported/france_9.png-73f0b0f78acade929f9e0aea4103e370.s3tc.ctex"
+metadata={
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
+}
+generator_parameters={
+"md5": "734e4aa33b118c3a37c14c64a4f0b2fe"
+}
+
+[deps]
+
+source_file="res://assets/map/france_9.png"
+dest_files=["res://.godot/imported/france_9.png-73f0b0f78acade929f9e0aea4103e370.s3tc.ctex"]
+
+[params]
+
+compress/mode=2
+compress/high_quality=false
+compress/lossy_quality=0.7
+compress/hdr_compression=1
+compress/normal_map=0
+compress/channel_pack=0
+mipmaps/generate=true
+mipmaps/limit=-1
+roughness/mode=0
+roughness/src_normal=""
+process/fix_alpha_border=true
+process/premult_alpha=false
+process/normal_map_invert_y=false
+process/hdr_as_srgb=false
+process/hdr_clamp_exposure=false
+process/size_limit=0
+detect_3d/compress_to=0

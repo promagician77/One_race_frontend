@@ -1,16 +1,4 @@
 extends Node
-## HTTP client for the Nitto Revival API.
-##
-## Every call returns a Dictionary: { ok: bool, data: Variant, code: String,
-## message: String }. Screens never inspect status codes or parse JSON — they
-## check `ok` and either use `data` or show `message`.
-##
-## Usage:
-##     var res := await Api.login("racer", "hunter2000")
-##     if res.ok:
-##         Router.home()
-##     else:
-##         _show_error(res.message)
 
 signal auth_changed(signed_in: bool)
 signal request_failed(code: String, message: String)
@@ -27,25 +15,15 @@ var _pool: Array[HTTPRequest] = []
 
 
 func _ready() -> void:
-	# Allow pointing at a staging server without a rebuild:
-	#   godot --  --api=https://api.example.com
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--api="):
 			base_url = arg.substr(6)
 
 	_load_token()
 
-
 func is_signed_in() -> bool:
 	return token != ""
 
-# ─────────────────────────────────────────────────────────────
-# AUTH
-# ─────────────────────────────────────────────────────────────
-
-## `email` is optional because the server does not store one yet -- there is
-## no email column on Player and none in contract v1.0. It is sent so the
-## client needs no change once that lands.
 func register(username: String, password: String, email: String = "") -> Dictionary:
 	var body := {"username": username, "password": password}
 	if email != "":
@@ -55,7 +33,6 @@ func register(username: String, password: String, email: String = "") -> Diction
 		_accept_session(res.data)
 	return res
 
-
 func login(username: String, password: String) -> Dictionary:
 	var res := await _http_post("/auth/login",
 		{"username": username, "password": password}, false)
@@ -63,13 +40,11 @@ func login(username: String, password: String) -> Dictionary:
 		_accept_session(res.data)
 	return res
 
-
 func refresh_me() -> Dictionary:
 	var res := await _http_get("/auth/me")
 	if res.ok:
 		player = res.data.get("player", {})
 	return res
-
 
 func sign_out() -> void:
 	token = ""
@@ -77,13 +52,11 @@ func sign_out() -> void:
 	_clear_token()
 	auth_changed.emit(false)
 
-
 func _accept_session(data: Dictionary) -> void:
 	token = data.get("token", "")
 	player = data.get("player", {})
 	_save_token()
 	auth_changed.emit(true)
-
 # ─────────────────────────────────────────────────────────────
 # CATALOG
 # ─────────────────────────────────────────────────────────────
@@ -164,6 +137,11 @@ func remove_part(car_id: String, category: String) -> Dictionary:
 	return await _http_post("/car/%s/part/remove" % car_id, {"category": category})
 
 
+## What a part would do if fitted. Nothing is bought and nothing is changed.
+func preview_part(car_id: String, part_id: String) -> Dictionary:
+	return await _http_post("/car/%s/part/preview" % car_id, {"partId": part_id})
+
+
 func tune_car(car_id: String, tune: Dictionary) -> Dictionary:
 	return await _http_post("/car/%s/tune" % car_id, {"tune": tune})
 
@@ -182,8 +160,6 @@ func repair_car(car_id: String) -> Dictionary:
 # RACING
 # ─────────────────────────────────────────────────────────────
 
-## Send a practice pass. The server simulates and returns the trace the
-## race view animates — the client never computes ET or trap speed.
 func run_practice(car_id: String, input: Dictionary) -> Dictionary:
 	return await _http_post("/race/practice", {"carId": car_id, "input": input})
 
@@ -202,8 +178,6 @@ func fetch_race_history() -> Dictionary:
 # TRANSPORT
 # ─────────────────────────────────────────────────────────────
 
-## Named _http_get rather than _get because Object._get(StringName) is a
-## reserved engine virtual and overriding it breaks property access.
 func _http_get(path: String, authed: bool = true) -> Dictionary:
 	return await _request(HTTPClient.METHOD_GET, path, {}, authed)
 
@@ -226,10 +200,6 @@ func _request(method: int, path: String, body: Dictionary, authed: bool) -> Dict
 		_release(http)
 		return _fail("NETWORK", "Cannot reach the server. Is it running?")
 
-	# Await the signal directly rather than polling a flag set inside a lambda.
-	# GDScript closures capture locals BY VALUE, so a lambda writing to an
-	# outer `completed` bool updates its own copy and the caller waits forever.
-	# HTTPRequest.timeout already surfaces a stall as RESULT_TIMEOUT here.
 	var result: Array = await http.request_completed
 
 	_release(http)

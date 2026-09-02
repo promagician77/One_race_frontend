@@ -285,3 +285,214 @@ func _run() -> void:
 
 	screen.queue_free()
 	await get_tree().process_frame
+
+
+	# ── GameState is backed by the server ─────────────────────
+	# The point of the state layer: nothing the player owns lives only in the
+	# client. Every check here reads back what the server stored, not what the
+	# client hoped it stored.
+	_section("Server-backed state")
+
+	Api.sign_out()
+	var st_user := "state_%d" % (Time.get_unix_time_from_system() * 1000)
+	var st_made: Dictionary = await Api.register(st_user, "correcthorse42", "%s@example.com" % st_user)
+	_check("registered for the state test", st_made.ok, str(st_made.get("message", "")))
+
+	GameState.reset()
+	var st_hydrated: Dictionary = await GameState.hydrate()
+	_check("hydrate pulls the player", st_hydrated.get("ok", false),
+		str(st_hydrated.get("reason", st_hydrated.get("message", ""))))
+	_check("cash came from the server", int(GameState.player.cash) == 3500,
+		str(GameState.player.cash))
+	_check("garage starts empty on the server", GameState.garage.size() == 0)
+
+	var st_bought: Dictionary = await GameState.buy_car("cm_hatch_kei")
+	_check("buying goes through the server", st_bought.get("ok", false),
+		str(st_bought.get("reason", "")))
+	_check("the car is in the local cache", GameState.garage.size() == 1)
+	_check("cash reflects the server's figure", int(GameState.player.cash) == 2300,
+		str(GameState.player.cash))
+	_check("the first car became active", GameState.active_car_id != "")
+
+	var st_car_id: String = str(GameState.garage[0].id)
+	_check("the car kept its server id", st_car_id.length() > 0)
+	_check("the car was translated into the client's shape",
+		GameState.garage[0].has("model_id") and GameState.garage[0].has("installed")
+			and GameState.garage[0].has("tune"),
+		str(GameState.garage[0].keys()))
+
+	var st_tuned: Dictionary = await GameState.tune_car(st_car_id, {"afr": 12.5})
+	_check("tuning goes through the server", st_tuned.get("ok", false),
+		str(st_tuned.get("reason", "")))
+	_check("the tune came back applied",
+		abs(float(GameState.get_car(st_car_id).tune.afr) - 12.5) < 0.001,
+		str(GameState.get_car(st_car_id).tune.afr))
+
+	# The real proof: throw the cache away and ask the server again.
+	GameState.reset()
+	_check("cache cleared", GameState.garage.size() == 0)
+	await GameState.hydrate()
+	_check("the car survives a cleared cache", GameState.garage.size() == 1,
+		str(GameState.garage.size()))
+	_check("so does the tune",
+		abs(float(GameState.garage[0].tune.afr) - 12.5) < 0.001,
+		str(GameState.garage[0].tune.afr))
+	_check("so does the cash", int(GameState.player.cash) == 2300,
+		str(GameState.player.cash))
+
+	var st_sold: Dictionary = await GameState.sell_car(st_car_id)
+	_check("selling goes through the server", st_sold.get("ok", false),
+		str(st_sold.get("reason", "")))
+	_check("the garage empties", GameState.garage.size() == 0)
+	_check("the refund landed", int(GameState.player.cash) > 2300,
+		str(GameState.player.cash))
+
+
+	# ── M2 gate: fitting parts changes the airflow match ───────
+	# The milestone's wording: "buy a car, install parts, run the dyno, watch
+	# flow sync change the HP curve." All of it inside a starting player's
+	# $3,500 -- and the Bantam GX shows the whole thesis on its own, because
+	# the T2 pair costs three times the T1 pair and makes less power with it.
+	_section("Flow sync")
+
+	Api.sign_out()
+	var fs_user := "sync_%d" % (Time.get_unix_time_from_system() * 1000)
+	await Api.register(fs_user, "correcthorse42", "%s@example.com" % fs_user)
+	GameState.reset()
+	await GameState.hydrate()
+
+	var fs_bought: Dictionary = await GameState.buy_car("cm_hatch_kei")   # $1,200
+	_check("bought a car to work on", fs_bought.get("ok", false),
+		str(fs_bought.get("reason", "")))
+	var fs_car: String = str(GameState.garage[0].id) if GameState.garage.size() > 0 else ""
+	_check("the car has an id", fs_car != "")
+
+	var fs_stock: Dictionary = await Api.fetch_stats(fs_car)
+	_check("stock car reports a match score",
+		fs_stock.ok and fs_stock.data.has("syncScore"), str(fs_stock.get("message", "")))
+	var fs_stock_hp: int = int(fs_stock.data.get("peakHp", 0))
+	var fs_stock_sync: int = int(fs_stock.data.get("syncScore", 0))
+
+	# A bare engine still breathes, badly: flow is capped below what it wants.
+	_check("a stock car is slightly starved",
+		int(fs_stock.data.systemAirFlow) < int(fs_stock.data.engineAirNeed),
+		"%d cfm vs %d wanted" % [int(fs_stock.data.systemAirFlow),
+			int(fs_stock.data.engineAirNeed)])
+
+	# The cheap matched pair. Both halves matter: the air path is a chain, so
+	# upgrading one end alone changes nothing.
+	var fit_in: Dictionary = await GameState.install_part(fs_car, "pt_intake_t1")
+	_check("fitting the intake goes through the server", fit_in.get("ok", false),
+		str(fit_in.get("reason", "")))
+
+	var half: Dictionary = await Api.fetch_stats(fs_car)
+	_check("an intake alone does not raise system flow, the exhaust still caps it",
+		int(half.data.systemAirFlow) == int(fs_stock.data.systemAirFlow),
+		"%d -> %d cfm" % [int(fs_stock.data.systemAirFlow), int(half.data.systemAirFlow)])
+
+	var fit_ex: Dictionary = await GameState.install_part(fs_car, "pt_exh_t1")
+	_check("fitting the exhaust goes through the server", fit_ex.get("ok", false),
+		str(fit_ex.get("reason", "")))
+
+	var fs_t1: Dictionary = await Api.fetch_stats(fs_car)
+	var t1_hp: int = int(fs_t1.data.peakHp)
+	var t1_sync: int = int(fs_t1.data.syncScore)
+	_check("with both ends done the system flows more air",
+		int(fs_t1.data.systemAirFlow) > int(fs_stock.data.systemAirFlow),
+		"%d -> %d cfm" % [int(fs_stock.data.systemAirFlow), int(fs_t1.data.systemAirFlow)])
+	_check("the match improves", t1_sync > fs_stock_sync,
+		"%d -> %d" % [fs_stock_sync, t1_sync])
+	_check("and the car makes more power", t1_hp > fs_stock_hp,
+		"%d -> %d hp" % [fs_stock_hp, t1_hp])
+
+	# The dearer pair. More airflow than this engine can use.
+	var up_in: Dictionary = await GameState.install_part(fs_car, "pt_intake_t2")
+	_check("fitting the pricier intake works", up_in.get("ok", false),
+		str(up_in.get("reason", "")))
+	var up_ex: Dictionary = await GameState.install_part(fs_car, "pt_exh_t2")
+	_check("fitting the pricier exhaust works", up_ex.get("ok", false),
+		str(up_ex.get("reason", "")))
+
+	var fs_t2: Dictionary = await Api.fetch_stats(fs_car)
+	var t2_hp: int = int(fs_t2.data.peakHp)
+	var t2_sync: int = int(fs_t2.data.syncScore)
+
+	_check("the pricier pair over-flows the engine",
+		int(fs_t2.data.systemAirFlow) > int(fs_t2.data.engineAirNeed),
+		"%d cfm into an engine wanting %d" % [int(fs_t2.data.systemAirFlow),
+			int(fs_t2.data.engineAirNeed)])
+	_check("so the match score collapses", t2_sync < t1_sync,
+		"%d -> %d" % [t1_sync, t2_sync])
+
+	# This is the line the whole game rests on.
+	_check("and the expensive pair makes LESS power than the cheap one",
+		t2_hp < t1_hp, "$920 of parts: %d hp, $330 of parts: %d hp" % [t2_hp, t1_hp])
+
+	# Taking one off has to walk it back, or the shop's REMOVE button lies.
+	var stripped: Dictionary = await GameState.remove_part(fs_car, "INTAKE")
+	_check("removing a part goes through the server", stripped.get("ok", false),
+		str(stripped.get("reason", "")))
+	_check("and the slot is empty again",
+		str(GameState.get_car(fs_car).installed.intake) == "",
+		str(GameState.get_car(fs_car).installed.intake))
+
+	var fs_curve: Dictionary = await Api.run_dyno(fs_car)
+	_check("the dyno returns a curve to plot",
+		fs_curve.ok and fs_curve.data.get("dynoCurve", []).size() > 0,
+		str(fs_curve.data.get("dynoCurve", []).size()))
+
+
+	# ── the garage panel gets real numbers ────────────────────
+	# Its stat rows come from /car/:id/stats. Everything else on that panel
+	# reads GameState, so blank stats with a filled OWNED count means the
+	# request never landed rather than the panel being wired wrong.
+	_section("Garage panel")
+
+	Api.sign_out()
+	var g_user := "garage_%d" % (Time.get_unix_time_from_system() * 1000)
+	await Api.register(g_user, "correcthorse42", "%s@example.com" % g_user)
+	GameState.reset()
+	await GameState.hydrate()
+	await GameState.buy_car("cm_hatch_kei")
+
+	var g_host := Control.new()
+	add_child(g_host)
+	Router.register_container(g_host)
+
+	var g_packed: PackedScene = load("res://scenes/garage/Garage.tscn")
+	var g_screen: Control = g_packed.instantiate()
+	add_child(g_screen)
+	# Generous: the screen fetches its stats over HTTP, and HTTPRequest needs
+	# frames to poll. If it fills within this and not within six, the screen
+	# is fine and the wait was too short.
+	for _i in 60:
+		await get_tree().process_frame
+
+	# The server sends activeCarId as JSON null for a player with no car.
+	# Dictionary.get()'s default only fires when the key is *missing*, so
+	# str() on it produced the literal text "<null>" -- not empty, so every
+	# "do I have an active car" check passed and every lookup for it failed.
+	_check("a null from the server never becomes the text '<null>'",
+		not str(GameState.active_car_id).contains("null"),
+		GameState.active_car_id)
+	_check("the garage picks up the car", GameState.garage.size() == 1,
+		str(GameState.garage.size()))
+	_check("and selects it", g_screen._selected != "", g_screen._selected)
+	# Is it the endpoint, or the screen's call to it?
+	var direct: Dictionary = await Api.fetch_stats(str(GameState.garage[0].id))
+	_check("the stats endpoint answers", direct.get("ok", false),
+		str(direct.get("message", direct.get("code", ""))))
+	_check("stats arrived from the server", not g_screen._stats.is_empty(),
+		str(g_screen._stats.keys()))
+	_check("power is a real figure", int(g_screen._stats.get("peakHp", 0)) > 0,
+		str(g_screen._stats.get("peakHp", "missing")))
+	_check("the panel shows it rather than a dash",
+		g_screen._panel._values[0].text.contains("HP"),
+		g_screen._panel._values[0].text)
+	_check("and handling reads the grip the server reports",
+		g_screen._panel._values[5].text != "—",
+		g_screen._panel._values[5].text)
+
+	g_screen.queue_free()
+	await get_tree().process_frame
+

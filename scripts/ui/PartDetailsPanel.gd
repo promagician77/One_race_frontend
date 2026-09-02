@@ -235,7 +235,26 @@ func show_part(part: Dictionary, preview: Dictionary, shot_path: String) -> void
 	else:
 		_shot.visible = false
 
-	_price.text = Design.fmt_cash(int(part.get("price", 0)))
+	# The price shown is the price charged: a part replacing a fitted one
+	# trades the old one in at 40%, and the server's preview says so.
+	var already := bool(preview.get("alreadyFitted", false))
+	var trade_in := int(preview.get("tradeIn", 0))
+	if already:
+		_price.text = "FITTED"
+		_price.add_theme_color_override("font_color", Design.GOOD)
+	elif trade_in > 0:
+		_price.text = "%s AFTER TRADE-IN" % Design.fmt_cash(int(preview.get("netPrice", part.get("price", 0))))
+		_price.add_theme_color_override("font_color", Design.AMBER)
+	else:
+		_price.text = Design.fmt_cash(int(part.get("price", 0)))
+		_price.add_theme_color_override("font_color", Design.AMBER)
+
+	# Nothing to buy when it is already on the car.
+	if _buy != null:
+		_buy.disabled = already
+	if _install != null:
+		_install.disabled = already
+
 	_fill_rows()
 	_rescale_type()
 

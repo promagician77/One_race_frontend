@@ -33,6 +33,8 @@ func _ready() -> void:
 	await _test_boot_is_visible()
 	await _test_parts_shop()
 	await _test_garage()
+	await _test_tune_screen()
+	await _test_move_dialog()
 	await _test_null_fields()
 
 	_report()
@@ -1248,6 +1250,7 @@ func _test_garage() -> void:
 	garage._selected = "c1"
 	garage._panel.show_car(GameState.get_car("c1"), {
 		"peakHp": 106, "peakTorque": 99, "totalWeight": 2050, "grip": 1.0,
+		"topSpeedMph": 100.0, "zeroToHundredKmh": 6.42,
 	})
 	await get_tree().process_frame
 
@@ -1261,11 +1264,12 @@ func _test_garage() -> void:
 	_check("handling reads the grip the server now reports",
 		garage._panel._values[5].text == "1", garage._panel._values[5].text)
 
-	# Two rows have no answer in this game yet, and must say so rather than
-	# showing a number nobody measured.
-	_check("top speed and acceleration are left blank, not invented",
-		garage._panel._values[3].text == "—" and garage._panel._values[4].text == "—",
-		"%s / %s" % [garage._panel._values[3].text, garage._panel._values[4].text])
+	# The server derives these two from a headless simulation pass. The art
+	# captions them in metric, so the panel converts before it prints.
+	_check("top speed is converted to the art's KM/H",
+		garage._panel._values[3].text == "161 KM/H", garage._panel._values[3].text)
+	_check("0-100 reads as seconds", garage._panel._values[4].text == "6.4 S",
+		garage._panel._values[4].text)
 
 	# With no server answer yet, the panel reads the catalog the way the
 	# dealership plate does, so it is never blank while a request is in
@@ -1277,6 +1281,11 @@ func _test_garage() -> void:
 		"%s / %s" % [garage._panel._values[0].text, garage._panel._values[2].text])
 	_check("including a stock grip for handling",
 		garage._panel._values[5].text != "—", garage._panel._values[5].text)
+	# The catalog cannot know pass results, so those rows dash until the
+	# server answers rather than inventing a number.
+	_check("pass-derived rows stay blank without server stats",
+		garage._panel._values[3].text == "—" and garage._panel._values[4].text == "—",
+		"%s / %s" % [garage._panel._values[3].text, garage._panel._values[4].text])
 	garage._panel.show_car(GameState.get_car("c1"), {
 		"peakHp": 106, "peakTorque": 99, "totalWeight": 2050, "grip": 1.0,
 	})
@@ -1335,6 +1344,161 @@ func _test_garage() -> void:
 ## JSON null is not a missing key. Dictionary.get()'s default only fires when
 ## the key is absent, so str() on a null field yields the text "<null>" --
 ## which is truthy, non-empty, and silently wrong everywhere it is used.
+func _test_tune_screen() -> void:
+	_section("Tune screen")
+
+	GameState.reset()
+	GameState.garage = [{
+		"id": "c1", "model_id": "cm_hatch_kei", "nickname": "Runabout",
+		"impounded": false, "nitrous": "",
+		"tune": {
+			"afr": 12.5, "compression": 10.0, "final_drive": 4.10,
+			"launch_rpm": 3200, "tire_pressure": 30.0, "clutch_release": 0.5,
+			"nitrous_point": 0.0,
+			"gear_ratios": [3.30, 2.10, 1.50, 1.15, 0.92],
+			"shift_points": [8100, 8100, 8100, 8100],
+		},
+	}]
+	GameState.active_car_id = "c1"
+	Router.context = {"car_id": "c1"}
+
+	var packed: PackedScene = load("res://scenes/tune/TuneScreen.tscn")
+	var tune: Control = packed.instantiate()
+	add_child(tune)
+	await get_tree().process_frame
+
+	_check("tune screen builds", tune.get_child_count() > 0)
+	_check("titled for the car being tuned",
+		tune._title.text.contains("RUNABOUT"), tune._title.text)
+
+	# The sliders must refuse what the server would clamp: same bounds as
+	# TUNE_BOUNDS in garage.js.
+	var afr_meta: Dictionary = tune._dials["afr"]
+	var afr_slider: HSlider = afr_meta.slider
+	_check("AFR slider carries the server's bounds",
+		afr_slider.min_value == 10.0 and afr_slider.max_value == 18.0,
+		"%s..%s" % [afr_slider.min_value, afr_slider.max_value])
+	var comp_meta: Dictionary = tune._dials["compression"]
+	var comp_slider: HSlider = comp_meta.slider
+	_check("compression slider carries the server's bounds",
+		comp_slider.min_value == 7.0 and comp_slider.max_value == 15.0)
+
+	_check("seeded from the car's saved tune", afr_slider.value == 12.5,
+		str(afr_slider.value))
+	var afr_label: Label = afr_meta.label
+	_check("AFR reads as a mixture ratio", afr_label.text == "12.5:1", afr_label.text)
+
+	var model := Catalog.get_car_model("cm_hatch_kei")
+	_check("one ratio slider per gear",
+		tune._gear_sliders.size() == int(model.gearCount),
+		str(tune._gear_sliders.size()))
+	_check("one shift point per gear change",
+		tune._shift_sliders.size() == int(model.gearCount) - 1,
+		str(tune._shift_sliders.size()))
+	var g1: HSlider = tune._gear_sliders[0]
+	_check("gear ratios seed from the tune", g1.value == 3.30, str(g1.value))
+
+	var nitro_meta: Dictionary = tune._dials["nitrousPoint"]
+	var nitro_slider: HSlider = nitro_meta.slider
+	_check("nitrous dial is inert without a kit", not nitro_slider.editable)
+
+	# The payload speaks the server's language: camelCase keys, full arrays.
+	var payload: Dictionary = tune._payload()
+	_check("payload carries every dial",
+		payload.has("afr") and payload.has("finalDrive") and payload.has("tirePressure")
+			and payload.has("clutchRelease") and payload.has("nitrousPoint"),
+		str(payload.keys()))
+	_check("payload gears are complete",
+		payload["gearRatios"].size() == int(model.gearCount)
+			and payload["shiftPoints"].size() == int(model.gearCount) - 1)
+
+	# Readouts render straight from a stats dictionary -- no request needed.
+	tune._stats = {
+		"peakHp": 142, "peakTorque": 118, "syncScore": 88.0,
+		"riskLevel": 61, "riskLabel": "HIGH", "damageChancePerPass": 0.052,
+		"engineHealth": 74, "simEt": 13.412, "simTs": 98.3,
+		"topSpeedMph": 100.0, "zeroToHundredKmh": 6.42,
+		"dynoCurve": [
+			{"rpm": 1000, "hp": 20, "torque": 90},
+			{"rpm": 4000, "hp": 90, "torque": 118},
+			{"rpm": 8000, "hp": 142, "torque": 95},
+		],
+	}
+	tune._refresh_readouts()
+	_check("peak power reads from stats", tune._blocks["peak"].text == "142 HP",
+		tune._blocks["peak"].text)
+	_check("top speed converts to KM/H", tune._blocks["top"].text == "161 KM/H",
+		tune._blocks["top"].text)
+	_check("0-100 reads in seconds", tune._blocks["accel"].text == "6.4 S",
+		tune._blocks["accel"].text)
+	_check("risk strip names the level and the odds",
+		tune._risk_text.text.contains("HIGH") and tune._risk_text.text.contains("5.2%"),
+		tune._risk_text.text)
+	_check("a worn engine is flagged in the header",
+		tune._health_note.text == "ENGINE 74%", tune._health_note.text)
+	_check("the dyno graph holds the curve", tune._graph.points.size() == 3)
+
+	tune._refresh_readouts()
+	_check("the last curve stays as a ghost for comparison",
+		tune._graph.ghost.size() == 3)
+
+	tune.queue_free()
+	await get_tree().process_frame
+	GameState.reset()
+	Router.context = {}
+
+
+func _test_move_dialog() -> void:
+	_section("Move dialog")
+
+	GameState.reset()
+
+	# Starting cash covers Northridge; the dialog invites the move.
+	var up := MoveDialog.new()
+	add_child(up)
+	up.setup("NORTHRIDGE")
+	_check("an affordable move can be confirmed", not up._confirm.disabled)
+	_check("the button names the price", up._confirm.text == "MOVE IN — $500",
+		up._confirm.text)
+	_check("no refusal is shown", not up._reason.visible)
+	_check("no impound warning going up", up._impound_warn == null)
+	up.queue_free()
+
+	# Downtown is far out of reach; the dialog says so instead of trying.
+	var rich := MoveDialog.new()
+	add_child(rich)
+	rich.setup("DOWNTOWN")
+	_check("an unaffordable move cannot be confirmed", rich._confirm.disabled)
+	_check("and the reason is on screen",
+		rich._reason.visible and rich._reason.text.length() > 0, rich._reason.text)
+	rich.queue_free()
+
+	# Where you already live is not a destination.
+	var same := MoveDialog.new()
+	add_child(same)
+	same.setup("HARBOUR")
+	_check("moving to your own district is refused", same._confirm.disabled)
+	same.queue_free()
+
+	# Moving down is free but the dialog warns about the parking squeeze
+	# before the server impounds anything.
+	GameState.player.neighborhood = "NORTHRIDGE"
+	GameState.garage = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+	var down := MoveDialog.new()
+	add_child(down)
+	down.setup("HARBOUR")
+	_check("moving down can be confirmed", not down._confirm.disabled)
+	_check("a free move has no price on the button", down._confirm.text == "MOVE IN",
+		down._confirm.text)
+	_check("the impound warning counts the overflow",
+		down._impound_warn != null and down._impound_warn.text.begins_with("2 of your cars"),
+		"" if down._impound_warn == null else down._impound_warn.text)
+	down.queue_free()
+
+	await get_tree().process_frame
+	GameState.reset()
+
+
 func _test_null_fields() -> void:
 	print("\n-- null handling")
 

@@ -133,6 +133,8 @@ func _on_submit() -> void:
 		show_status(str(res.get("message", "Sign in failed.")), Design.BAD)
 		return
 
+	show_status("Loading your garage...", Design.TEXT_BODY)
+	await GameState.hydrate()
 	clear_status()
 	Router.home()
 

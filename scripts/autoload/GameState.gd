@@ -49,6 +49,10 @@ func _new_player() -> void:
 	player.username = "Racer"
 	player.cash = Catalog.starting_cash()
 	player.neighborhood = "HARBOUR"
+	player.street_credit = 0
+	player.rank = "Noob"
+	player.total_races = 0
+	player.wins = 0
 	garage = []
 	active_car_id = ""
 	save_game()
@@ -94,6 +98,19 @@ func _text(source: Dictionary, key: String, fallback: String = "") -> String:
 	return fallback if raw == null else str(raw)
 
 
+## The numeric twin of _text: a JSON null value would crash float()/int(),
+## and Dictionary.get()'s default only fires when the key is MISSING.
+func _num(source: Dictionary, key: String, fallback: float = 0.0) -> float:
+	var raw = source.get(key, null)
+	return fallback if not (raw is float or raw is int) else float(raw)
+
+
+## Arrays get the same treatment: a null is not an Array.
+func _list(source: Dictionary, key: String) -> Array:
+	var raw = source.get(key, null)
+	return raw if raw is Array else []
+
+
 func _apply_player(p: Dictionary) -> void:
 	if p.is_empty():
 		return
@@ -109,8 +126,11 @@ func _apply_player(p: Dictionary) -> void:
 	player.total_races = int(p.get("totalRaces", 0))
 	player.wins = int(p.get("wins", 0))
 
+	# The server's answer stands even when it is null — a player whose last
+	# car was sold elsewhere has NO active car, and keeping a dead id here
+	# sent every downstream screen chasing a car that does not exist.
 	var server_active := _text(p, "activeCarId")
-	if server_active != "" and server_active != active_car_id:
+	if server_active != active_car_id:
 		active_car_id = server_active
 		active_car_changed.emit(active_car_id)
 
@@ -158,20 +178,20 @@ func _car_from_server(c: Dictionary) -> Dictionary:
 			"body": _text(c, "bodyId"),
 		},
 		"tune": {
-			"gear_ratios": c.get("gearRatios", []),
-			"final_drive": float(c.get("finalDrive", 4.10)),
-			"launch_rpm": int(c.get("launchRpm", 0)),
-			"shift_points": c.get("shiftPoints", []),
-			"tire_pressure": float(c.get("tirePressure", 32.0)),
-			"clutch_release": float(c.get("clutchRelease", 0.5)),
-			"afr": float(c.get("afr", 14.7)),
-			"compression": float(c.get("compression", 9.5)),
-			"nitrous_point": float(c.get("nitrousPoint", 0.0)),
+			"gear_ratios": _list(c, "gearRatios"),
+			"final_drive": _num(c, "finalDrive", 4.10),
+			"launch_rpm": int(_num(c, "launchRpm", 0)),
+			"shift_points": _list(c, "shiftPoints"),
+			"tire_pressure": _num(c, "tirePressure", 32.0),
+			"clutch_release": _num(c, "clutchRelease", 0.5),
+			"afr": _num(c, "afr", 14.7),
+			"compression": _num(c, "compression", 9.5),
+			"nitrous_point": _num(c, "nitrousPoint", 0.0),
 		},
 		"condition": {
-			"engine_health": float(c.get("engineHealth", 100.0)),
-			"stress_accum": float(c.get("stressAccum", 0.0)),
-			"passes_since_rebuild": int(c.get("passesSinceRebuild", 0)),
+			"engine_health": _num(c, "engineHealth", 100.0),
+			"stress_accum": _num(c, "stressAccum", 0.0),
+			"passes_since_rebuild": int(_num(c, "passesSinceRebuild", 0)),
 		},
 		"best_et": c.get("bestEt", null),
 		"best_ts": c.get("bestTs", null),
@@ -225,7 +245,13 @@ func parking_limit() -> int:
 
 
 func parking_used() -> int:
-	return garage.size()
+	# Impounded cars sit at the impound lot, not in a home space — the same
+	# rule the server applies when buying and releasing.
+	var used := 0
+	for c in garage:
+		if not bool(c.get("impounded", false)):
+			used += 1
+	return used
 
 
 func has_parking_space() -> bool:
@@ -257,8 +283,14 @@ func can_move_to(neighborhood_id: String) -> Dictionary:
 			return {"ok": false, "reason": "You need %s to move in." % Design.fmt_cash(cost)}
 		return {"ok": true, "cost": cost, "impound": 0}
 
-	# Moving down is free but may impound cars over the new limit
-	var over: int = max(0, garage.size() - target.get("parkingSpaces", 1))
+	# Moving down is free but may impound cars over the new limit. Cars
+	# already at the impound stay there and are not seized "again", so the
+	# warning counts only the fresh seizures — as the server does.
+	var already := 0
+	for c in garage:
+		if bool(c.get("impounded", false)):
+			already += 1
+	var over: int = max(0, garage.size() - int(target.get("parkingSpaces", 1)) - already)
 	return {"ok": true, "cost": 0, "impound": over}
 
 
@@ -281,10 +313,17 @@ func move_to(neighborhood_id: String) -> Dictionary:
 	if g.ok:
 		_apply_garage(g.data)
 
-	neighborhood_changed.emit(neighborhood_id)
+	# _apply_player already announced the neighborhood change; announcing it
+	# again here made every listener rebuild twice per move.
 	garage_changed.emit()
 	save_game()
-	return {"ok": true, "cost": check.get("cost", 0), "impound": check.get("impound", 0)}
+	return {
+		"ok": true,
+		# The server's numbers, not the local guess: it knows what it charged
+		# and exactly how many cars it seized.
+		"cost": int(res.data.get("cost", 0)),
+		"impound": int(res.data.get("impounded", 0)),
+	}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -314,10 +353,12 @@ func buy_car(model_id: String) -> Dictionary:
 	_apply_car(res.data.get("car", {}))
 	set_cash(int(res.data.get("cash", player.cash)))
 
-	if active_car_id == "":
-		var bought := str(res.data.get("car", {}).get("id", ""))
-		if bought != "":
-			await set_active_car(bought)
+	# The server already decided the active car (a first purchase becomes it);
+	# read the decision instead of making a second request to repeat it.
+	var server_active := _text(res.data, "activeCarId", active_car_id)
+	if server_active != active_car_id:
+		active_car_id = server_active
+		active_car_changed.emit(active_car_id)
 
 	garage_changed.emit()
 	save_game()
@@ -338,8 +379,11 @@ func sell_car(car_id: String) -> Dictionary:
 
 	set_cash(int(res.data.get("cash", player.cash)))
 
-	if active_car_id == car_id:
-		active_car_id = str(garage[0].id) if garage.size() > 0 else ""
+	# The server picked the successor (or null); mirroring its choice keeps
+	# both sides driving the same car.
+	var next_active := _text(res.data, "activeCarId")
+	if next_active != active_car_id:
+		active_car_id = next_active
 		active_car_changed.emit(active_car_id)
 
 	garage_changed.emit()
@@ -409,7 +453,7 @@ func release_from_impound(car_id: String) -> Dictionary:
 	set_cash(int(res.data.get("cash", player.cash)))
 	garage_changed.emit()
 	save_game()
-	return {"ok": true}
+	return {"ok": true, "fee": int(res.data.get("fee", 0))}
 
 
 func get_car(car_id: String) -> Dictionary:
@@ -467,9 +511,15 @@ func load_game() -> bool:
 		push_warning("Save file is corrupt. Starting fresh.")
 		return false
 
-	player = parsed.get("player", player)
-	garage = parsed.get("garage", [])
-	active_car_id = parsed.get("active_car_id", "")
+	# Merge over the defaults instead of replacing them: a save written by an
+	# older build must never remove a field the code accesses directly.
+	var loaded = parsed.get("player", {})
+	if loaded is Dictionary:
+		for key in loaded.keys():
+			player[key] = loaded[key]
+	var cars = parsed.get("garage", [])
+	garage = cars if cars is Array else []
+	active_car_id = str(parsed.get("active_car_id", ""))
 	return true
 
 

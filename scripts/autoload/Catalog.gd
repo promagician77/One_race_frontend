@@ -1,7 +1,4 @@
 extends Node
-## Static game data: car models, parts, neighborhoods.
-## Loaded once at startup from JSON. In M4 these come from GET /catalog/*
-## and get cached here — the query API below does not change.
 
 const CARS_PATH  := "res://data/car_models.json"
 const PARTS_PATH := "res://data/parts.json"
@@ -21,7 +18,6 @@ var _hood_by_id: Dictionary = {}
 
 func _ready() -> void:
 	_load_all()
-
 
 func _load_all() -> void:
 	var cars := _read_json(CARS_PATH)

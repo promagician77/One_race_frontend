@@ -40,6 +40,7 @@ const LOCATIONS := [
 
 var _hotspots: Array = []
 var _selected: Dictionary = {}
+var _releasing := false
 
 ## Slides in from the right when a dealership is chosen.
 var _modal: LocationModal = null
@@ -282,13 +283,31 @@ func _on_modal_enter(loc: Dictionary) -> void:
 	_enter_location(loc, not _is_accessible(loc))
 
 
-## Fast travel is painted into the artwork but the game has no travel
-## mechanic -- moving neighbourhood is a paid, permanent decision made from
-## the map, not a shortcut. Say so rather than doing something surprising.
-func _on_modal_travel(_loc: Dictionary) -> void:
+## The TRAVEL row painted in every modal is the doorway to the move flow:
+## on a district's building it opens the move-in confirmation for that
+## district. The impound, track, and home aren't in any district, so there
+## is nothing to move to there.
+func _on_modal_travel(loc: Dictionary) -> void:
+	var hood_id := str(loc.get("hood", ""))
+	if hood_id == "":
+		var frame := get_tree().get_first_node_in_group("game_frame")
+		if frame != null:
+			frame.set_footer("YOU CAN ONLY MOVE TO A DISTRICT")
+		return
+
+	_modal.close()
+	var dlg := MoveDialog.new()
+	add_child(dlg)
+	dlg.setup(hood_id)
+	dlg.finished.connect(_on_move_finished)
+
+
+func _on_move_finished(moved: bool, message: String) -> void:
+	if not moved:
+		return
 	var frame := get_tree().get_first_node_in_group("game_frame")
 	if frame != null:
-		frame.set_footer("FAST TRAVEL NOT AVAILABLE YET")
+		frame.set_footer(message)
 
 
 func _on_modal_closed() -> void:
@@ -362,12 +381,47 @@ func _enter_location(loc: Dictionary, window_only: bool = false) -> void:
 
 
 func _show_impound() -> void:
-	# M1: impound is reachable but empty until the economy lands in M2.
 	for c in _detail.get_children():
+		_detail.remove_child(c)
 		c.queue_free()
-	_detail.add_child(UIKit.empty_state(
-		"Nothing impounded",
-		"Cars end up here when you move to a smaller neighborhood."))
+	_detail.show()
+
+	var seized: Array = GameState.garage.filter(func(c): return bool(c.get("impounded", false)))
+	if seized.is_empty():
+		_detail.add_child(UIKit.empty_state(
+			"Nothing impounded",
+			"Cars end up here when you move to a smaller neighborhood."))
+		return
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", Design.SP_2)
+	col.add_child(UIKit.heading("IMPOUND LOT", Design.SIZE_HEAD))
+	var fee := int(Catalog.impound_config().get("feePerCar", 250))
+	col.add_child(UIKit.body("Release fee: %s per car." % Design.fmt_cash(fee)))
+	for car in seized:
+		var row := HBoxContainer.new()
+		var name_l := UIKit.body(str(car.get("nickname", "")).to_upper(), Design.TEXT_PRIME)
+		name_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(name_l)
+		var b := UIKit.button("RELEASE — %s" % Design.fmt_cash(fee), UIKit.BtnStyle.PRIMARY)
+		b.pressed.connect(_on_release_impounded.bind(str(car.get("id", ""))))
+		row.add_child(b)
+		col.add_child(row)
+	_detail.add_child(col)
+
+
+func _on_release_impounded(car_id: String) -> void:
+	if _releasing:
+		return
+	_releasing = true
+	var res: Dictionary = await GameState.release_from_impound(car_id)
+	_releasing = false
+	if not is_inside_tree():
+		return
+	var frame := get_tree().get_first_node_in_group("game_frame")
+	if frame != null:
+		frame.set_footer("RELEASED — %s FEE PAID" % Design.fmt_cash(int(res.get("fee", 0))) 			if res.get("ok", false) else str(res.get("reason", "")).to_upper())
+	_show_impound()
 
 
 func _show_default_detail() -> void:

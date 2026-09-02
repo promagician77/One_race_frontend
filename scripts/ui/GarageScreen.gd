@@ -66,6 +66,10 @@ var _stats: Dictionary = {}   ## the selected car, as the server measures it
 ## Clicking a card selects it; making it the active ride is a second step.
 var _selected := ""
 
+## One garage action at a time: a double-click on a card or a button must not
+## send two paid requests.
+var _acting := false
+
 var _stage: Control          ## the floor to the right of the column
 var _hero: TextureRect       ## the selected car, large
 var _panel: GarageFuncPanel
@@ -133,6 +137,7 @@ func _build_stage() -> void:
 	_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_panel.set_active_requested.connect(_on_make_active)
 	_panel.sell_requested.connect(_on_sell)
+	_panel.tune_requested.connect(_on_tune)
 	_panel.exit_requested.connect(func(): Router.home())
 	add_child(_panel)
 
@@ -583,11 +588,24 @@ func _card_box(active: bool, impounded: bool, chosen: bool) -> StyleBoxFlat:
 # ACTIONS
 # ─────────────────────────────────────────────────────────────
 
+func _footer(note: String) -> void:
+	var frame := get_tree().get_first_node_in_group("game_frame")
+	if frame != null:
+		frame.set_footer(note)
+
+
 ## Clicking a card looks at that car. Driving it is a separate decision, so a
 ## misclick in the list cannot change which car a race would use.
 func _on_car(car_id: String, impounded: bool) -> void:
 	if impounded:
-		await GameState.release_from_impound(car_id)
+		if _acting:
+			return
+		_acting = true
+		var res: Dictionary = await GameState.release_from_impound(car_id)
+		_acting = false
+		if not is_inside_tree():
+			return
+		_footer("RELEASED — %s FEE PAID" % Design.fmt_cash(int(res.get("fee", 0))) 			if res.get("ok", false) else str(res.get("reason", "")).to_upper())
 		_rebuild()
 		return
 	_selected = car_id
@@ -600,28 +618,49 @@ func _on_car(car_id: String, impounded: bool) -> void:
 func _refresh_stats() -> void:
 	_stats = {}
 	var car := GameState.get_car(_selected)
-	if car.is_empty():
+	if not car.is_empty():
+		var res: Dictionary = await Api.fetch_stats(str(car.id))
+		if res.get("ok", false):
+			_stats = res.data
+	if not is_inside_tree():
 		return
-	var res: Dictionary = await Api.fetch_stats(str(car.id))
-	if res.get("ok", false):
-		_stats = res.data
+	# Repainted even with nothing selected: selling the last car must clear
+	# the floor, not leave the sold car's portrait and panel standing.
 	_refresh_stage()
+
+
+func _on_tune() -> void:
+	if _selected == "":
+		return
+	Router.go(Router.Screen.TUNE, {"car_id": _selected})
 
 
 func _on_sell() -> void:
 	var car := GameState.get_car(_selected)
-	if car.is_empty():
+	if car.is_empty() or _acting:
 		return
-	await GameState.sell_car(str(car.id))
+	_acting = true
+	var res: Dictionary = await GameState.sell_car(str(car.id))
+	_acting = false
+	if not is_inside_tree():
+		return
+	if res.get("ok", false):
+		_footer("SOLD — %s BACK" % Design.fmt_cash(int(res.get("refund", 0))))
+	else:
+		_footer(str(res.get("reason", "")).to_upper())
 	_selected = GameState.active_car_id
 	await _refresh_stats()
 	_rebuild()
 
 
 func _on_make_active() -> void:
-	if _selected == "" or _selected == GameState.active_car_id:
+	if _selected == "" or _selected == GameState.active_car_id or _acting:
 		return
+	_acting = true
 	await GameState.set_active_car(_selected)
+	_acting = false
+	if not is_inside_tree():
+		return
 	_rebuild()
 
 
@@ -642,6 +681,8 @@ func _refresh_stage() -> void:
 	var car := GameState.get_car(_selected)
 	if car.is_empty():
 		_hero.visible = false
+		if _panel != null:
+			_panel.show_car({}, {})
 		return
 
 	var model := _model(car)

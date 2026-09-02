@@ -32,16 +32,17 @@ const R_LOCATION := Rect2(170, 258, 415, 34)
 ## Stat rows. `key` is what the server calls it; an empty key means the game
 ## has no such number yet and the row says so rather than inventing one.
 ##
-## TOP SPEED and ACCELERATION would both mean running the simulation and
-## reading the trace -- neither is a property of a car, they are results of a
-## pass -- so they belong to a server endpoint that does not exist yet.
+## TOP SPEED and ACCELERATION are results of a pass, not properties of a car,
+## so the server derives them from a headless simulation run and only stats
+## carry them -- the catalog baseline cannot, and those rows show a dash
+## until the server answers.
 const ROWS := [
 	{ "y": 371, "key": "peakHp", "unit": "HP" },
 	{ "y": 447, "key": "peakTorque", "unit": "LB-FT" },
 	{ "y": 524, "key": "totalWeight", "unit": "LB" },
-	{ "y": 598, "key": "", "unit": "" },          # TOP SPEED
-	{ "y": 673, "key": "", "unit": "" },          # ACCELERATION 0-100
-	{ "y": 761, "key": "grip", "unit": "" },      # HANDLING
+	{ "y": 598, "key": "topSpeedMph", "unit": "" },       # TOP SPEED, shown in KM/H
+	{ "y": 673, "key": "zeroToHundredKmh", "unit": "" },  # ACCELERATION 0-100 KM/H
+	{ "y": 761, "key": "grip", "unit": "" },              # HANDLING
 ]
 const VALUE_X := 420.0
 const VALUE_W := 440.0
@@ -80,6 +81,7 @@ var _slots: Label
 var _previews: Array = []
 var _scaled: Array = []
 var _set_active: Button
+var _tune: Button
 var _sell: Button
 
 
@@ -151,8 +153,7 @@ func _build() -> void:
 		_previews.append(img)
 
 	_set_active = _hit(R_SET_ACTIVE, "Drive this car", func(): set_active_requested.emit())
-	_hit(R_TUNE, "The tune screen arrives with the next milestone",
-		func(): tune_requested.emit()).disabled = true
+	_tune = _hit(R_TUNE, "Dial it in", func(): tune_requested.emit())
 	_sell = _hit(R_SELL, "Sell it back", func(): sell_requested.emit())
 	_hit(R_EXIT, "Back to the map", func(): exit_requested.emit())
 
@@ -314,14 +315,20 @@ func show_car(car: Dictionary, stats: Dictionary) -> void:
 		var row: Dictionary = ROWS[i]
 		var key: String = str(row.key)
 		var label: Label = _values[i]
-		if key == "" or not eff.has(key):
+		if key == "" or not eff.has(key) or eff[key] == null:
 			# Nothing to say rather than a number nobody measured.
 			label.text = "—"
 			label.add_theme_color_override("font_color", Design.TEXT_DIM)
 		else:
-			var unit: String = str(row.unit)
-			label.text = "%d %s" % [int(eff[key]), unit] if unit != "" \
-				else str(eff[key])
+			# The art captions these two rows in metric, so the values match.
+			if key == "topSpeedMph":
+				label.text = "%d KM/H" % int(round(float(eff[key]) * 1.60934))
+			elif key == "zeroToHundredKmh":
+				label.text = "%.1f S" % float(eff[key])
+			else:
+				var unit: String = str(row.unit)
+				label.text = "%d %s" % [int(eff[key]), unit] if unit != "" \
+					else str(eff[key])
 			label.add_theme_color_override("font_color", Design.TEXT_PRIME)
 
 	_owned.text = str(GameState.garage.size())
@@ -346,4 +353,5 @@ func show_car(car: Dictionary, stats: Dictionary) -> void:
 	var impounded: bool = bool(car.get("impounded", false))
 	_set_active.disabled = active or impounded
 	_sell.disabled = impounded
+	_tune.disabled = impounded
 	_rescale()

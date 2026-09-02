@@ -37,6 +37,10 @@ func _boot() -> void:
 
 	var res: Dictionary = await Api.refresh_me()
 	if res.get("ok", false):
+		# The session is good — now pull the truth. Without this the whole
+		# client ran off the local save file: another account's cash, cars
+		# that don't exist, purchases refused on phantom numbers.
+		await GameState.hydrate()
 		Router.home()
 		return
 
@@ -68,6 +72,10 @@ func _on_auth_changed(signed_in: bool) -> void:
 	if signed_in:
 		_frame.refresh()
 	else:
+		# The session is gone: drop the cached world with it, and clear the
+		# back stack so Escape cannot navigate into a signed-out game.
+		GameState.reset()
+		Router.clear_stack()
 		Router.replace(Router.Screen.AUTH)
 
 

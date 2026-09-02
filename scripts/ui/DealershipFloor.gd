@@ -653,8 +653,13 @@ func refresh() -> void:
 ## change -- which cars, how many fit, whether the arrow is needed -- is
 ## settled here, so there is one place to look when the row is wrong.
 func _fill_strip() -> void:
+	# Detach before freeing: queue_free() lands at end of frame, and refresh
+	# runs more than once in the opening frame — without the detach the row
+	# briefly held two or three complete sets of cards.
 	for card in _cards:
-		card.queue_free()
+		if is_instance_valid(card):
+			_row.remove_child(card)
+			card.queue_free()
 	_cards.clear()
 	_page_models.clear()
 
@@ -691,12 +696,19 @@ func _on_next() -> void:
 	_fill_strip()
 
 
+## The floor stock. A dealership sells the cars homed to its district; with
+## no district in the context (tests, direct navigation) every model shows.
+func _base_stock() -> Array:
+	var hood := str(Router.context.get("neighborhood", ""))
+	return Catalog.cars_in(hood) if hood != "" else Catalog.all_car_models()
+
+
 func _filtered() -> Array:
 	if _category == "ALL CARS":
-		return Catalog.all_car_models().duplicate()
+		return _base_stock().duplicate()
 
 	var classes: Array = CLASS_FOR.get(_category, [])
-	return Catalog.all_car_models().filter(func(m):
+	return _base_stock().filter(func(m):
 		if not str(m.get("class", "")) in classes:
 			return false
 		# Only the exotics need splitting, and only on price.
@@ -846,8 +858,10 @@ func _paint_hero() -> void:
 ## cannot. Every refusal here is one GameState.buy_car() would make anyway --
 ## this only says it before the player commits instead of after.
 func _paint_buy(model: Dictionary) -> void:
-	if _owns(model):
-		_block("IN YOUR GARAGE", "You already own this one.", Design.TEXT_MUTED)
+	# Entered as a window shopper: everything is on display, nothing is for
+	# sale. The map said so when it offered "window shop" on a locked door.
+	if bool(Router.context.get("window_only", false)):
+		_block("WINDOW SHOPPING", "Move to %s to buy here." % str(model.dealership), Design.WARN)
 		return
 
 	if not GameState.can_shop_in(str(model.dealership)):
@@ -910,8 +924,9 @@ func _on_buy() -> void:
 		_say(str(res.get("reason", "That didn't go through.")), Design.BAD)
 		return
 
-	_say("%s is yours. Plate %s." % [model.name, res.car.plate], Design.GOOD)
-	car_bought.emit(res.car)
+	var bought: Dictionary = res.get("car", {})
+	_say("%s is yours. Plate %s." % [model.name, str(bought.get("plate", "—"))], Design.GOOD)
+	car_bought.emit(bought)
 
 
 ## The starting neighborhood has exactly one parking space, so the plural is

@@ -98,8 +98,11 @@ func _run() -> void:
 
 	var bought := await Api.buy_car("cm_hatch_kei")
 	_check("buying the Bantam succeeds", bought.ok, bought.message)
-	_check("server cash synced into GameState", GameState.player.cash == 2300,
-		str(GameState.player.cash))
+	# Api mirrors its own player; GameState is updated by ITS wrappers, in
+	# order (car first, then cash) — the old direct reach-in fired
+	# cash_changed while the garage was still pre-purchase.
+	_check("server cash mirrored on the Api session", int(Api.player.get("cash", -1)) == 2300,
+		str(Api.player.get("cash", -1)))
 
 	var car_id: String = bought.data.car.id
 
@@ -492,7 +495,89 @@ func _run() -> void:
 	_check("and handling reads the grip the server reports",
 		g_screen._panel._values[5].text != "—",
 		g_screen._panel._values[5].text)
+	# TOP SPEED and 0-100 exist only in server stats -- they come from a
+	# headless sim pass -- so a filled row proves that pipeline end to end.
+	_check("top speed arrives from the sim and reads in KM/H",
+		g_screen._panel._values[3].text.contains("KM/H"),
+		g_screen._panel._values[3].text)
+	_check("0-100 arrives from the sim and reads in seconds",
+		g_screen._panel._values[4].text.contains("S"),
+		g_screen._panel._values[4].text)
 
 	g_screen.queue_free()
+	await get_tree().process_frame
+
+
+	# ── the tune screen, live ─────────────────────────────────
+	# Same player, same car. The screen fetches its stats, a dial change goes
+	# through GameState.tune_car, and the server's reply drives every readout.
+	_section("Tune screen")
+
+	var t_car: Dictionary = GameState.garage[0]
+	Router.context = {"car_id": str(t_car.id)}
+	var t_packed: PackedScene = load("res://scenes/tune/TuneScreen.tscn")
+	var t_screen: Control = t_packed.instantiate()
+	add_child(t_screen)
+	for _i in 60:
+		await get_tree().process_frame
+
+	_check("the screen fetched live stats", not t_screen._stats.is_empty(),
+		str(t_screen._stats.keys()))
+	_check("the dyno curve arrived to plot", t_screen._graph.points.size() > 5,
+		str(t_screen._graph.points.size()))
+	_check("readouts show the live quarter-mile",
+		t_screen._blocks["et"].text.contains("S"), t_screen._blocks["et"].text)
+
+	# Turn a dial and apply: the change must land on the server and come back.
+	var t_afr: Dictionary = t_screen._dials["afr"]
+	var t_slider: HSlider = t_afr.slider
+	t_slider.set_value_no_signal(13.4)
+	t_screen._show_dial_value("afr")
+	await t_screen._apply()
+
+	var t_after := GameState.get_car(str(t_car.id))
+	_check("the tune landed on the server and came back",
+		absf(float(t_after.tune.afr) - 13.4) < 0.001, str(t_after.tune.afr))
+	_check("the reply refreshed the risk readout",
+		t_screen._risk_text.text.contains("RISK"), t_screen._risk_text.text)
+	_check("lean of 13.0 is never free",
+		int(t_screen._stats.get("riskLevel", 0)) > 0,
+		str(t_screen._stats.get("riskLevel", 0)))
+
+	t_screen.queue_free()
+	await get_tree().process_frame
+	Router.context = {}
+
+
+	# ── the move flow, live ───────────────────────────────────
+	# Same player: fresh in Harbour with a kei car and change from $3,500.
+	# The dialog's CONFIRM drives the real move and the server's answer is
+	# what the player dict shows afterwards.
+	_section("Move flow")
+
+	_check("the player starts in Harbour",
+		str(GameState.player.get("neighborhood", "")) == "HARBOUR",
+		str(GameState.player.get("neighborhood", "")))
+
+	var m_dlg := MoveDialog.new()
+	add_child(m_dlg)
+	m_dlg.setup("NORTHRIDGE")
+	_check("the move-in is priced and confirmable",
+		not m_dlg._confirm.disabled and m_dlg._confirm.text.contains("$500"),
+		m_dlg._confirm.text)
+
+	var m_cash_before: int = int(GameState.player.get("cash", 0))
+	m_dlg._on_confirm()
+	var m_out: Array = await m_dlg.finished
+	_check("the move went through", bool(m_out[0]), str(m_out))
+	_check("the dialog announces the new district",
+		str(m_out[1]).contains("NORTHRIDGE"), str(m_out[1]))
+	_check("the player now lives in Northridge",
+		str(GameState.player.get("neighborhood", "")) == "NORTHRIDGE",
+		str(GameState.player.get("neighborhood", "")))
+	_check("the move-in fee left the wallet",
+		int(GameState.player.get("cash", 0)) == m_cash_before - 500,
+		"%d -> %d" % [m_cash_before, int(GameState.player.get("cash", 0))])
+	_check("parking follows the district", GameState.parking_limit() == 3)
 	await get_tree().process_frame
 

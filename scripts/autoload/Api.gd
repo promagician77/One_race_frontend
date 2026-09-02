@@ -203,10 +203,10 @@ func _request(method: int, path: String, body: Dictionary, authed: bool) -> Dict
 	var result: Array = await http.request_completed
 
 	_release(http)
-	return _interpret(result)
+	return _interpret(result, path)
 
 
-func _interpret(result: Array) -> Dictionary:
+func _interpret(result: Array, path: String = "") -> Dictionary:
 	var http_result: int = result[0]
 	var status: int = result[1]
 	var headers: PackedStringArray = result[2]
@@ -236,6 +236,10 @@ func _interpret(result: Array) -> Dictionary:
 	var parsed = JSON.parse_string(text) if text != "" else {}
 
 	if status >= 200 and status < 300:
+		# A proxy or captive portal can hand back HTML with a 200. Treating
+		# that as success returned data:null and crashed every caller.
+		if parsed == null:
+			return _fail("BAD_RESPONSE", "The server sent something unreadable.")
 		return {"ok": true, "data": parsed, "code": "", "message": ""}
 
 	# Every server error uses the same envelope
@@ -244,7 +248,11 @@ func _interpret(result: Array) -> Dictionary:
 		var code: String = e.get("code", "UNKNOWN")
 		var message: String = e.get("message", "Something went wrong.")
 
-		if code == "UNAUTHORIZED" and is_signed_in():
+		# Only a rejected TOKEN ends the session. A wrong password on the
+		# login form is also UNAUTHORIZED, and it must not delete a stored
+		# session that is still perfectly valid.
+		var credentials_check := path.begins_with("/auth/login") or path.begins_with("/auth/register")
+		if code == "UNAUTHORIZED" and is_signed_in() and not credentials_check:
 			sign_out()
 
 		request_failed.emit(code, message)
@@ -305,5 +313,7 @@ func _clear_token() -> void:
 func _sync_cash(cash) -> void:
 	if cash == null:
 		return
+	# Mirror only. GameState's own wrapper applies the cash AFTER the car —
+	# emitting from here fired cash_changed while the garage was still
+	# pre-purchase, and listeners reading both saw them disagree.
 	player["cash"] = int(cash)
-	GameState.set_cash(int(cash))

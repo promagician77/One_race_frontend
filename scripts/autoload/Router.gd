@@ -78,6 +78,12 @@ func home() -> void:
 	_swap(Screen.MAP, {})
 
 
+## Forget everything behind this point. Called on sign-out so Escape cannot
+## walk back into a session that no longer exists.
+func clear_stack() -> void:
+	_stack.clear()
+
+
 func can_go_back() -> bool:
 	return not _stack.is_empty()
 

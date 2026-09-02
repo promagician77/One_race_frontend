@@ -103,6 +103,8 @@ signal category_chosen(category: String)
 
 var _category := "ALL"
 var _selected := ""
+var _fitting := false
+var _preview_seq := 0
 var _page := 0
 var _side: Control
 var _strip: Control
@@ -405,7 +407,11 @@ func _pager_width() -> float:
 ## What the shelf is showing. A shop displays its stock whether or not you
 ## have a car to put it on -- fitting is what needs one.
 func _stock() -> Array:
-	var all: Array = Catalog.all_parts()
+	# The shop the player walked into sells ITS stock — the map modal's count
+	# and the shelf must agree. With no district in the context (tests, direct
+	# navigation) the full catalog stands in.
+	var hood := str(Router.context.get("neighborhood", ""))
+	var all: Array = Catalog.parts_in(hood) if hood != "" else Catalog.all_parts()
 	if _category == "ALL":
 		# One of each kind, cheapest first, so the shelf reads as a spread
 		# rather than five variations of the same part.
@@ -532,6 +538,12 @@ func _on_card(part_id: String) -> void:
 	await _show_details(part_id)
 
 
+func _footer(note: String) -> void:
+	var frame := get_tree().get_first_node_in_group("game_frame")
+	if frame != null:
+		frame.set_footer(note)
+
+
 ## Fill the panel for a part. The before-and-after figures come from the
 ## server; with no car there is nothing to compare against, so the panel shows
 ## the part and leaves the columns blank rather than inventing a baseline.
@@ -548,7 +560,13 @@ func _show_details(part_id: String) -> void:
 		_details.show_part(part, {}, shot)
 		return
 
+	# Previews race: clicking two cards inside one round trip must land the
+	# panel on the LAST click, not on whichever response was slower.
+	_preview_seq += 1
+	var seq := _preview_seq
 	var res: Dictionary = await Api.preview_part(str(car.id), part_id)
+	if not is_inside_tree() or seq != _preview_seq:
+		return
 	_details.show_part(part, res.data if res.get("ok", false) else {}, shot)
 
 
@@ -566,11 +584,22 @@ func _on_install_part(part_id: String) -> void:
 func _fit(part_id: String) -> void:
 	var car := GameState.get_active_car()
 	if car.is_empty():
+		_footer("YOU NEED A CAR TO FIT PARTS TO")
 		return
+	if _fitting:
+		return
+	_fitting = true
 	var res: Dictionary = await GameState.install_part(str(car.id), part_id)
+	_fitting = false
+	if not is_inside_tree():
+		return
 	if res.get("ok", false):
+		_footer("FITTED")
 		_rebuild_cards()
 		await _show_details(part_id)
+	else:
+		# A refusal in silence reads as a dead button; say why.
+		_footer(str(res.get("reason", "That didn't go through.")).to_upper())
 
 
 func _on_next_page() -> void:

@@ -279,7 +279,10 @@ func _build(kind: String) -> void:
 
 	_hit(_cfg["r_close"], "Close", _on_close)
 	_hit(_cfg["r_enter"], "Enter this location", _on_enter)
-	_hit(_cfg["r_travel"], "Fast travel is not available yet", _on_travel)
+	_hit(_cfg["r_travel"],
+		"Move to this district" if str(_loc.get("hood", "")) != ""
+			else "Not a district you can live in",
+		_on_travel)
 
 	_rescale_type()
 
@@ -772,11 +775,14 @@ func close() -> void:
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
 	_tween.tween_property(self, "modulate:a", 0.0, SLIDE_TIME * 0.6)
 	_tween.chain().tween_callback(hide)
+	# Every close announces itself — the map hid its detail card when this
+	# panel opened, and a close() that skipped the signal left it hidden for
+	# the rest of the session.
+	closed.emit()
 
 
 func _on_close() -> void:
 	close()
-	closed.emit()
 
 
 func _on_enter() -> void:
